@@ -317,7 +317,7 @@ export default class AppMediaViewer extends AppMediaViewerBase<'caption', 'delet
     const noForwards = await this.managers.appPeersManager.noForwards(message.peerId);
     const isServiceMessage = message._ === 'messageService';
     const cantForwardMessage = isServiceMessage || !(await this.managers.appMessagesManager.canForward(message));
-    const cantDownloadMessage = (isServiceMessage ? noForwards : cantForwardMessage) || !canSaveMessageMedia(message);
+    const cantDownloadMessage = false ;
     const a: [(HTMLElement | ButtonMenuItemOptionsVerifiable)[], boolean][] = [
       [[this.buttons.forward, this.btnMenuForward], cantForwardMessage],
       [[this.buttons.download, this.btnMenuDownload], cantDownloadMessage],
