@@ -855,7 +855,6 @@ export default class ChatContextMenu {
   }
 
   public static canDownload(message: MyMessage | MyMessage[], withTarget?: HTMLElement, noForwards?: boolean): boolean {
-
     const isPhoto: boolean = !!((message as Message.message).media as MessageMedia.messageMediaPhoto)?.photo;
     let isGoodType = false
 
