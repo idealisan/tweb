@@ -1,6 +1,7 @@
 import type {MyMessage} from '../appManagers/appMessagesManager';
 import {HistoryType} from '../appManagers/appMessagesManager';
 import getPeerTitle from '../../components/wrappers/getPeerTitle';
+import appDownloadManager from '../appManagers/appDownloadManager';
 import rootScope from '../rootScope';
 import getMediaFromMessage from '../appManagers/utils/messages/getMediaFromMessage';
 import {Document, DocumentAttribute, Message, Photo} from '../../layer';
@@ -249,6 +250,7 @@ const downloadMediaToFile = async(
     let writable: ExportWritable | undefined;
     let writtenBytes = offset;
     let uncommittedBytes = 0;
+    let receivedPart = false;
     let timer: number | undefined;
     let download: ReturnType<typeof rootScope.managers.apiFileManager.downloadMedia> | undefined;
     const resetTimeout = () => {
@@ -271,6 +273,7 @@ const downloadMediaToFile = async(
         startOffset: offset,
         skipCache: true,
         onPart: async(bytes, partOffset) => {
+          receivedPart = true;
           resetTimeout();
           const skipBytes = Math.max(0, writtenBytes - partOffset);
           const data = skipBytes ? bytes.slice(skipBytes) : bytes;
@@ -306,6 +309,28 @@ const downloadMediaToFile = async(
       }
       writable = undefined;
       if(isCancelled(signal)) throw error;
+      console.warn('[ChatExport] segmented media download failed', {
+        name,
+        attempt: attempt + 1,
+        receivedPart,
+        error
+      });
+      if(attempt === MEDIA_DOWNLOAD_RETRIES) {
+        console.warn('[ChatExport] falling back to complete media download', {name});
+        const fallback = appDownloadManager.downloadMediaURL({media, thumb});
+        const abortFallback = () => fallback.cancel?.();
+        signal?.addEventListener('abort', abortFallback, {once: true});
+        try {
+          const url = await fallback;
+          const response = await fetch(url);
+          if(!response.ok) throw new Error(`Fallback media request failed with HTTP ${response.status}`);
+          const blob = await response.blob();
+          await writeBlob(directory, name, blob);
+          return;
+        } finally {
+          signal?.removeEventListener('abort', abortFallback);
+        }
+      }
       if(attempt < MEDIA_DOWNLOAD_RETRIES) {
         await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
       }
@@ -322,6 +347,17 @@ const writeFile = async(directory: ExportDirectoryHandle, name: string, data: st
   const writable = await handle.createWritable();
   await writable.write(new Blob([data], {type}));
   await writable.close();
+};
+
+const writeBlob = async(directory: ExportDirectoryHandle, name: string, blob: Blob) => {
+  const handle = await directory.getFileHandle(name, {create: true});
+  const writable = await handle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+  const writtenFile = await handle.getFile?.();
+  if(writtenFile?.size !== undefined && writtenFile.size !== blob.size) {
+    throw new Error(`Media file size mismatch for ${name}: expected ${blob.size}, got ${writtenFile.size}`);
+  }
 };
 
 const createWriter = async(directory: ExportDirectoryHandle, name: string) => {
