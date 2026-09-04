@@ -78,6 +78,7 @@ const PAGE_SIZE = 100;
 const MEDIA_DOWNLOAD_TIMEOUT = 120000;
 const MEDIA_DOWNLOAD_RETRIES = 2;
 const MEDIA_WRITE_COMMIT_BYTES = 4 * 1024 * 1024;
+const MEDIA_PROGRESS_THRESHOLD = 10 * 1024 * 1024;
 
 const escapeHTML = (value: string) => value
 .replace(/&/g, '&amp;')
@@ -232,7 +233,8 @@ const makeHTMLMessage = (message: ExportedMessage) => {
 const downloadMediaToFile = async(
   media: Photo.photo | Document.document,
   directory: ExportDirectoryHandle,
-  name: string
+  name: string,
+  onProgress?: (downloaded: number) => void
 ) => {
   const fileHandle = await directory.getFileHandle(name, {create: true});
   let writable = await fileHandle.createWritable();
@@ -252,7 +254,7 @@ const downloadMediaToFile = async(
       if(writable.seek) await writable.seek(writtenBytes);
       uncommittedBytes = 0;
     }
-  });
+  }, onProgress ? (downloaded) => onProgress(downloaded) : undefined);
   await writable.close();
 };
 
@@ -473,7 +475,19 @@ export async function exportChatHistory(options: ChatExportOptions) {
               lastFile = {...lastMedia, status: 'pending'};
               lastItem = {...lastItem, path: mediaPath};
               await writeCheckpoint('exporting', offsetId, lastMedia);
-              await downloadMediaToFile(media as Photo.photo | Document.document, mediaDirectory, fileName);
+              await downloadMediaToFile(
+                media as Photo.photo | Document.document,
+                mediaDirectory,
+                fileName,
+                mediaSize !== undefined && mediaSize > MEDIA_PROGRESS_THRESHOLD ?
+                  (downloaded) => onProgress?.({
+                    loaded: exportedCount,
+                    total,
+                    current: `${fileName} (${formatMediaSize(downloaded)} / ${formatMediaSize(mediaSize)})`,
+                    phase: 'history'
+                  }) :
+                  undefined
+              );
               completedMedia.set(mediaPath, mediaSize);
               failedMedia.delete(mediaPath);
               lastFile = {...lastMedia, status: 'downloaded'};

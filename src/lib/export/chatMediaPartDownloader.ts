@@ -7,6 +7,7 @@ const PART_SIZE = 512 * 1024;
 
 type DownloadableMedia = Photo.photo | Document.document;
 type PartCallback = (bytes: Uint8Array, offset: number) => Promise<void>;
+type ProgressCallback = (downloaded: number, total?: number) => void;
 
 const getFloodWaitSeconds = (error: unknown) => {
   const type = typeof error === 'object' && error && 'type' in error ? String(error.type) : '';
@@ -22,7 +23,8 @@ const waitForFloodWait = (seconds: number) => new Promise<void>((resolve) => {
 export async function downloadMediaParts(
   media: DownloadableMedia,
   thumb: PhotoSize | undefined,
-  onPart: PartCallback
+  onPart: PartCallback,
+  onProgress?: ProgressCallback
 ) {
   const source = media._ === 'document' ?
     await rootScope.managers.appDocsManager.getDoc(media.id) || media :
@@ -57,5 +59,6 @@ export async function downloadMediaParts(
     if(!bytes?.byteLength) break;
     await onPart(bytes, offset);
     offset += bytes.byteLength;
+    onProgress?.(offset, size || undefined);
   }
 }
