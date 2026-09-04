@@ -65,6 +65,8 @@ import assumeType from '../../helpers/assumeType';
 import PinnedContainer from './pinnedContainer';
 import IS_LIVE_STREAM_SUPPORTED from '../../environment/liveStreamSupport';
 import ChatTranslation from './translation';
+import PopupChatExportSettings from '../popups/chatExportSettings';
+import {ChatExportProgress} from '../../lib/export/chatHistoryExporter';
 
 type ButtonToVerify = {element?: HTMLElement, verify: () => boolean | Promise<boolean>};
 
@@ -105,6 +107,9 @@ export default class ChatTopbar {
   private buttonsToVerify: ButtonToVerify[];
   private chatInfoContainer: HTMLDivElement;
   private person: HTMLDivElement;
+  private exportProgress: HTMLElement;
+  private exportProgressBar: HTMLElement;
+  private exportAbortController: AbortController;
 
   private titleMiddlewareHelper: MiddlewareHelper;
   private status: ReturnType<ChatTopbar['createStatus']>;
@@ -579,6 +584,13 @@ export default class ChatTopbar {
         return !!userFull?.pFlags?.blocked;
       }
     }, {
+      icon: 'download',
+      text: 'ChatExport.Menu',
+      onClick: () => {
+        PopupElement.createPopup(PopupChatExportSettings, this.chat).show();
+      },
+      verify: () => !this.exportProgress
+    }, {
       icon: 'delete',
       danger: true,
       text: 'Delete',
@@ -595,6 +607,35 @@ export default class ChatTopbar {
     this.attachClickEvent(this.btnSearch, (e) => {
       this.chat.initSearch();
     }, true);
+  }
+
+  public startExportProgress(title: string, abortController: AbortController) {
+    this.exportAbortController = abortController;
+    this.exportProgress = document.createElement('div');
+    this.exportProgress.className = 'chat-export-progress';
+    this.exportProgress.textContent = `正在导出 ${title} 0 / --`;
+    this.exportProgressBar = document.createElement('div');
+    this.exportProgressBar.className = 'chat-export-progress-bar';
+    this.exportProgress.append(this.exportProgressBar);
+    this.container.before(this.exportProgress);
+  }
+
+  public updateExportProgress(progress: ChatExportProgress) {
+    if(!this.exportProgress) return;
+    const total = progress.total || 0;
+    this.exportProgress.firstChild.textContent = `正在导出 ${this.title.textContent || ''} ${progress.loaded} / ${total || '--'}`;
+    this.exportProgressBar.style.width = total ? `${Math.min(100, progress.loaded / total * 100)}%` : '0%';
+  }
+
+  public finishExportProgress(failed: boolean) {
+    if(!this.exportProgress) return;
+    this.exportProgress.classList.toggle('is-failed', failed);
+    this.exportProgress.firstChild.textContent = failed ? '聊天导出失败' : '聊天导出完成';
+    window.setTimeout(() => {
+      this.exportProgress?.remove();
+      this.exportProgress = undefined;
+      this.exportAbortController = undefined;
+    }, 2500);
   }
 
   public addContact() {

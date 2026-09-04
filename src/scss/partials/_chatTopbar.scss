@@ -441,3 +441,23 @@ body.is-right-column-shown {
     }
   }
 }
+.chat-export-progress {
+  position: relative;
+  z-index: 2;
+  padding: 4px 12px;
+  color: var(--secondary-text-color);
+  font-size: 12px;
+  background: var(--surface-color);
+}
+
+.chat-export-progress-bar {
+  height: 2px;
+  margin-top: 3px;
+  width: 0;
+  background: var(--primary-color);
+  transition: width .2s ease;
+}
+
+.chat-export-progress.is-failed .chat-export-progress-bar {
+  background: var(--danger-color);
+}
