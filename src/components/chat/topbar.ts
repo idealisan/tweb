@@ -109,7 +109,9 @@ export default class ChatTopbar {
   private person: HTMLDivElement;
   private exportProgress: HTMLElement;
   private exportProgressBar: HTMLElement;
+  private exportProgressText: HTMLElement;
   private exportAbortController: AbortController;
+  private exportActive = false;
 
   private titleMiddlewareHelper: MiddlewareHelper;
   private status: ReturnType<ChatTopbar['createStatus']>;
@@ -589,7 +591,7 @@ export default class ChatTopbar {
       onClick: () => {
         PopupElement.createPopup(PopupChatExportSettings, this.chat).show();
       },
-      verify: () => !this.exportProgress
+      verify: () => !this.exportActive
     }, {
       icon: 'delete',
       danger: true,
@@ -610,32 +612,65 @@ export default class ChatTopbar {
   }
 
   public startExportProgress(title: string, abortController: AbortController) {
+    this.exportProgress?.remove();
+    this.exportActive = true;
     this.exportAbortController = abortController;
     this.exportProgress = document.createElement('div');
     this.exportProgress.className = 'chat-export-progress';
-    this.exportProgress.textContent = `正在导出 ${title} 0 / --`;
+    this.exportProgressText = document.createElement('div');
+    this.exportProgressText.className = 'chat-export-progress-text';
+    this.exportProgressText.textContent = `正在导出 ${title} 0 / --`;
     this.exportProgressBar = document.createElement('div');
     this.exportProgressBar.className = 'chat-export-progress-bar';
-    this.exportProgress.append(this.exportProgressBar);
+    this.exportProgressText.append(this.exportProgressBar);
+    const closeButton = document.createElement('button');
+    closeButton.className = 'chat-export-progress-close';
+    closeButton.type = 'button';
+    closeButton.textContent = '×';
+    closeButton.setAttribute('aria-label', 'Close export status');
+    closeButton.addEventListener('click', () => {
+      if(!this.exportActive) {
+        this.exportProgress?.remove();
+        this.exportProgress = undefined;
+        return;
+      }
+
+      void confirmationPopup({
+        titleLangKey: 'ChatExport.CancelTitle',
+        descriptionLangKey: 'ChatExport.CancelText',
+        button: {
+          langKey: 'ChatExport.Cancel',
+          isDanger: true
+        }
+      }).then(() => {
+        this.exportAbortController?.abort();
+        this.exportProgress?.remove();
+        this.exportProgress = undefined;
+      }).catch(() => {});
+    });
+    this.exportProgress.append(this.exportProgressText, closeButton);
     this.container.before(this.exportProgress);
   }
 
   public updateExportProgress(progress: ChatExportProgress) {
     if(!this.exportProgress) return;
     const total = progress.total || 0;
-    this.exportProgress.firstChild.textContent = `正在导出 ${this.title.textContent || ''} ${progress.loaded} / ${total || '--'}`;
+    const current = progress.current ? ` · ${progress.current}` : '';
+    this.exportProgressText.textContent = `正在导出 ${this.title.textContent || ''} ${progress.loaded} / ${total || '--'}${current}`;
+    this.exportProgressText.append(this.exportProgressBar);
     this.exportProgressBar.style.width = total ? `${Math.min(100, progress.loaded / total * 100)}%` : '0%';
   }
 
   public finishExportProgress(failed: boolean) {
-    if(!this.exportProgress) return;
-    this.exportProgress.classList.toggle('is-failed', failed);
-    this.exportProgress.firstChild.textContent = failed ? '聊天导出失败' : '聊天导出完成';
-    window.setTimeout(() => {
-      this.exportProgress?.remove();
-      this.exportProgress = undefined;
+    this.exportActive = false;
+    if(!this.exportProgress) {
       this.exportAbortController = undefined;
-    }, 2500);
+      return;
+    }
+    this.exportProgress.classList.toggle('is-failed', failed);
+    this.exportProgressText.textContent = failed ? '聊天导出失败' : '聊天导出完成';
+    this.exportProgressText.append(this.exportProgressBar);
+    this.exportAbortController = undefined;
   }
 
   public addContact() {

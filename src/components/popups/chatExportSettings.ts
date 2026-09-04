@@ -18,7 +18,7 @@ export default class PopupChatExportSettings extends PopupElement {
   private formatFields: {format: ChatExportFormat, field: CheckboxField}[] = [];
   private mediaFields: {type: ChatExportMediaType, field: CheckboxField}[] = [];
   private selectAllMediaField: CheckboxField;
-  private maxMediaBytes = 2 ** 24;
+  private maxMediaBytes = 2 ** 32;
 
   private appendCheckbox(title: string, field: CheckboxField) {
     const caption = document.createElement('span');
@@ -70,12 +70,12 @@ export default class PopupChatExportSettings extends PopupElement {
     sizeLabel.className = 'chat-export-size';
     sizeLabel.textContent = 'Maximum media file size: ';
     const sizeValue = document.createElement('output');
-    sizeValue.textContent = '10 MB';
+    sizeValue.textContent = '4 GB';
     const sizeInput = document.createElement('input');
     sizeInput.type = 'range';
     sizeInput.min = '12';
     sizeInput.max = '32';
-    sizeInput.value = '24';
+    sizeInput.value = '32';
     sizeInput.addEventListener('input', () => {
       const bytes = 2 ** +sizeInput.value;
       this.maxMediaBytes = bytes;

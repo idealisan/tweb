@@ -444,10 +444,20 @@ body.is-right-column-shown {
 .chat-export-progress {
   position: relative;
   z-index: 2;
-  padding: 4px 12px;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 8px 4px 12px;
   color: var(--secondary-text-color);
   font-size: 12px;
   background: var(--surface-color);
+}
+
+.chat-export-progress-text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .chat-export-progress-bar {
@@ -456,6 +466,25 @@ body.is-right-column-shown {
   width: 0;
   background: var(--primary-color);
   transition: width .2s ease;
+}
+
+.chat-export-progress-close {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-inline-start: 8px;
+  padding: 0;
+  border: 0;
+  color: var(--secondary-text-color);
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 20px;
+  opacity: .7;
+
+  &:hover {
+    opacity: 1;
+  }
 }
 
 .chat-export-progress.is-failed .chat-export-progress-bar {

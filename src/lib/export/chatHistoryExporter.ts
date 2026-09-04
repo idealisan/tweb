@@ -4,15 +4,17 @@ import getPeerTitle from '../../components/wrappers/getPeerTitle';
 import rootScope from '../rootScope';
 import appDownloadManager from '../appManagers/appDownloadManager';
 import getMediaFromMessage from '../appManagers/utils/messages/getMediaFromMessage';
-import {Document, DocumentAttribute, Photo} from '../../layer';
+import {Document, DocumentAttribute, Message, Photo} from '../../layer';
 
 export type ChatExportFormat = 'html' | 'json';
 export type ChatExportMediaType = 'photos' | 'videos' | 'voice' | 'video_notes' | 'stickers' | 'animated_gif' | 'files';
 
 export type ExportDirectoryHandle = {
   readonly name?: string;
+  values?: () => AsyncIterableIterator<{kind: string, name: string}>;
   getDirectoryHandle: (name: string, options?: {create?: boolean}) => Promise<ExportDirectoryHandle>;
   getFileHandle: (name: string, options?: {create?: boolean}) => Promise<{
+    getFile?: () => Promise<{text: () => Promise<string>}>;
     createWritable: () => Promise<{
     write: (data: Blob | string) => Promise<void>;
       close: () => Promise<void>;
@@ -37,6 +39,7 @@ export type ChatExportOptions = {
 export type ChatExportProgress = {
   loaded: number;
   total?: number;
+  current?: string;
   phase: 'history' | 'writing' | 'completed' | 'cancelled' | 'failed';
 };
 
@@ -58,6 +61,12 @@ type DirectoryPickerWindow = Window & {
   showDirectoryPicker?: () => Promise<ExportDirectoryHandle>;
 };
 
+const getLocalTimestamp = () => {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+};
+
 const PAGE_SIZE = 100;
 const MEDIA_DOWNLOAD_TIMEOUT = 120000;
 const MEDIA_DOWNLOAD_RETRIES = 2;
@@ -72,6 +81,52 @@ const escapeHTML = (value: string) => value
 const safeName = (value: string) => value.replace(/[\\/:*?"<>|]/g, '_').trim() || 'Chat';
 
 const isCancelled = (signal?: AbortSignal) => signal?.aborted === true;
+
+const waitForRetry = (seconds: number, signal?: AbortSignal, onTick?: (remaining: number) => void) => new Promise<void>((resolve, reject) => {
+  if(isCancelled(signal)) {
+    reject(new DOMException('Export cancelled', 'AbortError'));
+    return;
+  }
+
+  let remaining = seconds;
+  onTick?.(remaining);
+  const interval = window.setInterval(() => onTick?.(--remaining), 1000);
+  const timer = window.setTimeout(() => {
+    window.clearInterval(interval);
+    resolve();
+  }, seconds * 1000);
+  signal?.addEventListener('abort', () => {
+    window.clearTimeout(timer);
+    window.clearInterval(interval);
+    reject(new DOMException('Export cancelled', 'AbortError'));
+  }, {once: true});
+});
+
+const getFloodWaitSeconds = (error: unknown) => {
+  const type = typeof error === 'object' && error && 'type' in error ? String(error.type) : '';
+  const message = error instanceof Error ? error.message : '';
+  const match = `${type} ${message}`.match(/FLOOD_WAIT[_ ](\d+)/i);
+  return match ? Number(match[1]) : undefined;
+};
+
+const requestExportHistory = async(
+  options: Parameters<typeof rootScope.managers.appMessagesManager.requestHistory>[0],
+  signal?: AbortSignal,
+  onRateLimit?: (seconds: number) => void
+) => {
+  while(true) {
+    if(isCancelled(signal)) throw new DOMException('Export cancelled', 'AbortError');
+    try {
+      return await rootScope.managers.appMessagesManager.requestHistory(options);
+    } catch(error) {
+      const seconds = getFloodWaitSeconds(error);
+      if(seconds === undefined) throw error;
+      console.info(`[ChatExport] Telegram rate limit; waiting ${seconds}s before retrying`);
+      onRateLimit?.(seconds);
+      await waitForRetry(seconds, signal, (remaining) => onRateLimit?.(remaining));
+    }
+  }
+};
 
 const normalizeMessage = (message: MyMessage): ExportedMessage => {
   const regularMessage = message as MyMessage & {
@@ -115,6 +170,31 @@ const getMediaExtension = (media: Photo.photo | Document.document) => {
   if(filenameExtension && filenameExtension !== filename?.toLowerCase()) return filenameExtension;
   const mimeExtension = document.mime_type?.split('/').pop()?.toLowerCase();
   return mimeExtension === 'jpeg' ? 'jpg' : mimeExtension || 'bin';
+};
+
+const getMediaSize = (media: Photo.photo | Document.document) => {
+  if(media._ === 'document') {
+    return typeof media.size === 'number' ? media.size : undefined;
+  }
+
+  return media.sizes.reduce<number | undefined>((largest, size) => {
+    if(size._ === 'photoSize' && typeof size.size === 'number') return Math.max(largest || 0, size.size);
+    if(size._ === 'photoSizeProgressive' && size.sizes.length) return Math.max(largest || 0, size.sizes[size.sizes.length - 1]);
+    return largest;
+  }, undefined);
+};
+
+const formatMediaSize = (bytes?: number) => {
+  if(bytes === undefined || !Number.isFinite(bytes)) return 'size unknown';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = Math.max(0, bytes);
+  let unit = 0;
+  while(value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const precision = unit === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(precision)} ${units[unit]}`;
 };
 
 const getMessageText = (message: ExportedMessage) => {
@@ -203,6 +283,60 @@ const createWriter = async(directory: ExportDirectoryHandle, name: string) => {
   return handle.createWritable();
 };
 
+type ExportCheckpoint = {
+  schema_version: number,
+  export_key: string,
+  status: 'exporting' | 'completed',
+  chat: {peer_id: PeerId, title: string, thread_id: number | null},
+  exported_at: string,
+  range: {from: string | null, to: string | null},
+  formats: ChatExportFormat[],
+  media_types: ChatExportMediaType[],
+  max_media_bytes: number,
+  message_count: number,
+  total_count?: number,
+  next_offset_id: number | null,
+  parts: {path: string, format: ChatExportFormat, message_count: number}[]
+};
+
+const getExportKey = (options: ChatExportOptions) => JSON.stringify({
+  peerId: options.peerId,
+  threadId: options.threadId || null,
+  formats: options.formats.slice().sort(),
+  mediaTypes: options.mediaTypes.slice().sort(),
+  maxMediaBytes: options.maxMediaBytes,
+  fromDate: options.fromDate?.toISOString() || null,
+  toDate: options.toDate?.toISOString() || null
+});
+
+const readCheckpoint = async(directory: ExportDirectoryHandle) => {
+  try {
+    const handle = await directory.getFileHandle('export_metadata.json');
+    const file = await handle.getFile?.();
+    if(!file) return undefined;
+    return JSON.parse(await file.text()) as ExportCheckpoint;
+  } catch(error) {
+    if(error instanceof DOMException && error.name === 'NotFoundError') return undefined;
+    throw error;
+  }
+};
+
+const getExportDirectory = async(directory: ExportDirectoryHandle, title: string, exportKey: string) => {
+  const prefix = `${safeName(title)}_`;
+  if(directory.values) {
+    for await (const entry of directory.values()) {
+      if(entry.kind !== 'directory' || !entry.name.startsWith(prefix)) continue;
+      const candidate = await directory.getDirectoryHandle(entry.name);
+      const checkpoint = await readCheckpoint(candidate);
+      if(checkpoint?.export_key === exportKey && checkpoint.status !== 'completed') {
+        return candidate;
+      }
+    }
+  }
+
+  return directory.getDirectoryHandle(`${prefix}${getLocalTimestamp()}`, {create: true});
+};
+
 export const pickExportDirectory = async() => {
   const picker = window as DirectoryPickerWindow;
   if(!picker.showDirectoryPicker) {
@@ -216,27 +350,58 @@ export async function exportChatHistory(options: ChatExportOptions) {
   const {peerId, threadId, directory, formats, signal, onProgress} = options;
   if(!formats.length) throw new Error('EXPORT_FORMAT_REQUIRED');
 
-  const exportDirectory = await directory.getDirectoryHandle(safeName(options.title), {create: true});
-  let exportedCount = 0;
-  let partNumber = 0;
-  const parts: {path: string, format: ChatExportFormat, message_count: number}[] = [];
-  let offsetId = 0;
+  const exportKey = getExportKey(options);
+  const exportDirectory = await getExportDirectory(directory, options.title, exportKey);
+  const checkpoint = await readCheckpoint(exportDirectory);
+  const canResume = checkpoint?.export_key === exportKey && checkpoint.status !== 'completed' && checkpoint.next_offset_id !== null;
+  let exportedCount = canResume ? checkpoint.message_count : 0;
+  let partNumber = canResume ? checkpoint.parts.reduce((max, part) => {
+    const match = part.path.match(/messages-(\d{4})\./);
+    return Math.max(max, match ? Number(match[1]) : 0);
+  }, 0) : 0;
+  const parts: {path: string, format: ChatExportFormat, message_count: number}[] = canResume ? checkpoint.parts.slice() : [];
+  let offsetId = canResume ? checkpoint.next_offset_id : 0;
   let total: number | undefined;
+  const visitedOffsets = new Set<number>();
+
+  const writeCheckpoint = async(status: ExportCheckpoint['status'], nextOffsetId: number | null) => {
+    await writeFile(exportDirectory, 'export_metadata.json', JSON.stringify({
+      schema_version: 2,
+      export_key: exportKey,
+      status,
+      chat: {peer_id: peerId, title: options.title, thread_id: threadId || null},
+      exported_at: new Date().toISOString(),
+      range: {from: options.fromDate?.toISOString() || null, to: options.toDate?.toISOString() || null},
+      formats,
+      media_types: options.mediaTypes,
+      max_media_bytes: options.maxMediaBytes,
+      message_count: exportedCount,
+      total_count: total,
+      next_offset_id: nextOffsetId,
+      parts
+    } satisfies ExportCheckpoint, null, 2), 'application/json');
+  };
 
   while(true) {
     if(isCancelled(signal)) throw new DOMException('Export cancelled', 'AbortError');
 
-    const result = await rootScope.managers.appMessagesManager.getHistory({
+    const result = await requestExportHistory({
       peerId,
       threadId,
       offsetId,
       limit: PAGE_SIZE,
-      historyType: threadId ? HistoryType.Thread : HistoryType.Chat,
-      allowRestricted: true
+      historyType: threadId ? HistoryType.Thread : HistoryType.Chat
+    }, signal, (seconds) => {
+      onProgress?.({loaded: exportedCount, total, current: `Telegram 限流，等待 ${seconds} 秒`, phase: 'history'});
     });
 
-    total = result.count || total;
-    const page = (await Promise.all(result.history.map(async(mid: number) => {
+    const rawMessages = result.messages || [];
+    total = 'count' in result ? result.count || total : total;
+    const messageIds = rawMessages
+    .filter((message): message is Message.message | Message.messageService => message._ === 'message' || message._ === 'messageService')
+    .map((message) => (message as (Message.message | Message.messageService) & {mid?: number}).mid ?? message.id);
+    if(!messageIds.length) break;
+    const page = (await Promise.all(messageIds.map(async(mid: number) => {
       try {
         return await rootScope.managers.appMessagesManager.getMessageByPeer(peerId, mid);
       } catch(error) {
@@ -257,16 +422,24 @@ export async function exportChatHistory(options: ChatExportOptions) {
       if(options.fromDate && timestamp < options.fromDate.getTime()) continue;
       if(options.toDate && timestamp > options.toDate.getTime()) continue;
       const exported = normalizeMessage(message);
+      const messageTime = new Date(timestamp).toLocaleString();
+      onProgress?.({loaded: exportedCount, total, current: messageTime, phase: 'history'});
 
       const mediaType = getMediaType(message);
       if(mediaType && options.mediaTypes.includes(mediaType)) {
         const media = getMediaFromMessage(message, true);
-        const mediaSize = media?._ === 'document' ? (media as Document.document).size : 0;
-        if(media && mediaSize <= options.maxMediaBytes) {
+        const mediaSize = media ? getMediaSize(media as Photo.photo | Document.document) : undefined;
+        if(media && (!mediaSize || mediaSize <= options.maxMediaBytes)) {
           const mediaDirectoryName = mediaType === 'photos' ? 'photos' : mediaType === 'videos' || mediaType === 'video_notes' || mediaType === 'animated_gif' ? 'video_files' : 'files';
           const mediaDirectory = await exportDirectory.getDirectoryHandle(mediaDirectoryName, {create: true});
           const extension = getMediaExtension(media as Photo.photo | Document.document);
           const fileName = `${message.mid}.${extension}`;
+          onProgress?.({
+            loaded: exportedCount,
+            total,
+            current: `${fileName} (${formatMediaSize(mediaSize)})`,
+            phase: 'history'
+          });
           try {
             const blob = await downloadMediaWithRetry(media as Photo.photo | Document.document, signal);
             await writeBlob(mediaDirectory, fileName, blob);
@@ -279,6 +452,14 @@ export async function exportChatHistory(options: ChatExportOptions) {
               error
             });
           }
+        } else if(media) {
+          console.info('[ChatExport] media skipped because it exceeds the size limit', {
+            peerId,
+            mid: message.mid,
+            mediaType,
+            mediaSize,
+            maxMediaBytes: options.maxMediaBytes
+          });
         }
       }
       if(jsonWriter) {
@@ -300,25 +481,17 @@ export async function exportChatHistory(options: ChatExportOptions) {
       await htmlWriter.close();
       parts.push({path: `${partName}.html`, format: 'html', message_count: partCount});
     }
+    const lastId = messageIds[messageIds.length - 1];
+    await writeCheckpoint('exporting', lastId);
     onProgress?.({loaded: exportedCount, total, phase: 'history'});
-    const lastId = page[page.length - 1]?.mid;
-    if(!lastId || page.length < PAGE_SIZE || result.isEnd.bottom) break;
+    if(!lastId || visitedOffsets.has(lastId)) break;
+    visitedOffsets.add(lastId);
     offsetId = lastId;
   }
 
   onProgress?.({loaded: exportedCount, total, phase: 'writing'});
 
-  const metadata = JSON.stringify({
-    schema_version: 1,
-    chat: {peer_id: peerId, title: options.title, thread_id: threadId || null},
-    exported_at: new Date().toISOString(),
-    range: {from: options.fromDate?.toISOString() || null, to: options.toDate?.toISOString() || null},
-    formats,
-    message_count: exportedCount,
-    parts
-  }, null, 2);
-
-  await writeFile(exportDirectory, 'export_metadata.json', metadata, 'application/json');
+  await writeCheckpoint('completed', null);
 
   onProgress?.({loaded: exportedCount, total, phase: 'completed'});
 }
