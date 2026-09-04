@@ -243,7 +243,7 @@ const downloadMediaToFile = async(
       undefined;
     const fileHandle = await directory.getFileHandle(name, {create: true});
     const existingFile = await fileHandle.getFile?.();
-    let offset = existingFile?.size || 0;
+    let offset = expectedSize !== undefined ? existingFile?.size || 0 : 0;
     if(expectedSize !== undefined && offset === expectedSize) return;
     if(expectedSize !== undefined && offset > expectedSize) offset = 0;
     let writable: ExportWritable | undefined;

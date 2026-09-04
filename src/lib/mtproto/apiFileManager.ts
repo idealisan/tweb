@@ -580,7 +580,7 @@ export class ApiFileManager extends AppManager {
     const cacheFileName = downloadId ? getDownloadFileNameFromOptions({...copy(options), downloadId: undefined}) : fileName;
     const cacheStorage: FileStorage = this.getFileStorage();
     const downloadStorage: FileStorage = downloadId ? this.downloadStorage : undefined;
-    let deferred: DownloadPromise = downloadId ? undefined : this.downloadPromises[fileName];
+    let deferred: DownloadPromise = downloadId || options.skipCache ? undefined : this.downloadPromises[fileName];
 
     log('start', fileName, options, size);
 
@@ -884,7 +884,7 @@ export class ApiFileManager extends AppManager {
 
     const {fileName, downloadOptions} = getDownloadMediaDetails(options);
 
-    let promise = this.getDownload(fileName);
+    let promise = options.onPart ? undefined : this.getDownload(fileName);
     if(!promise) {
       promise = this.download(downloadOptions);
 
