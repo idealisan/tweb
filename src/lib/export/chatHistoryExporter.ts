@@ -14,7 +14,7 @@ export type ExportDirectoryHandle = {
   values?: () => AsyncIterableIterator<{kind: string, name: string}>;
   getDirectoryHandle: (name: string, options?: {create?: boolean}) => Promise<ExportDirectoryHandle>;
   getFileHandle: (name: string, options?: {create?: boolean}) => Promise<{
-    getFile?: () => Promise<{text: () => Promise<string>}>;
+    getFile?: () => Promise<{text: () => Promise<string>, size?: number}>;
     createWritable: () => Promise<{
     write: (data: Blob | string) => Promise<void>;
       close: () => Promise<void>;
@@ -276,6 +276,10 @@ const writeBlob = async(directory: ExportDirectoryHandle, name: string, blob: Bl
   const writable = await handle.createWritable();
   await writable.write(blob);
   await writable.close();
+  const writtenFile = await handle.getFile?.();
+  if(writtenFile?.size !== undefined && writtenFile.size !== blob.size) {
+    throw new Error(`Media file size mismatch for ${name}: expected ${blob.size}, got ${writtenFile.size}`);
+  }
 };
 
 const createWriter = async(directory: ExportDirectoryHandle, name: string) => {
@@ -296,7 +300,12 @@ type ExportCheckpoint = {
   message_count: number,
   total_count?: number,
   next_offset_id: number | null,
-  parts: {path: string, format: ChatExportFormat, message_count: number}[]
+  parts: {path: string, format: ChatExportFormat, message_count: number}[],
+  media_files?: {path: string, size?: number}[],
+  failed_media?: {path: string, message_id: number, size?: number}[],
+  last_file?: {path: string, message_id: number, size?: number, status: 'pending' | 'downloaded' | 'failed'},
+  last_item?: {type: string, message_id: number, date: string, path?: string, status: 'pending' | 'completed' | 'failed'},
+  last_media?: {path: string, message_id: number, size?: number}
 };
 
 const getExportKey = (options: ChatExportOptions) => JSON.stringify({
@@ -363,8 +372,14 @@ export async function exportChatHistory(options: ChatExportOptions) {
   let offsetId = canResume ? checkpoint.next_offset_id : 0;
   let total: number | undefined;
   const visitedOffsets = new Set<number>();
+  let lastMedia = canResume ? checkpoint.last_media : undefined;
+  const completedMedia = new Map((canResume ? checkpoint.media_files || [] : []).map((file) => [file.path, file.size]));
+  const failedMedia = new Map((canResume ? checkpoint.failed_media || [] : []).map((file) => [file.path, file]));
+  let lastFile = canResume ? checkpoint.last_file : undefined;
+  let lastItem = canResume ? checkpoint.last_item : undefined;
+  const resumeItem = canResume ? checkpoint.last_item : undefined;
 
-  const writeCheckpoint = async(status: ExportCheckpoint['status'], nextOffsetId: number | null) => {
+  const writeCheckpoint = async(status: ExportCheckpoint['status'], nextOffsetId: number | null, media = lastMedia) => {
     await writeFile(exportDirectory, 'export_metadata.json', JSON.stringify({
       schema_version: 2,
       export_key: exportKey,
@@ -378,7 +393,12 @@ export async function exportChatHistory(options: ChatExportOptions) {
       message_count: exportedCount,
       total_count: total,
       next_offset_id: nextOffsetId,
-      parts
+      parts,
+      media_files: Array.from(completedMedia, ([path, size]) => ({path, size})),
+      failed_media: Array.from(failedMedia.values()),
+      last_file: lastFile,
+      last_item: lastItem,
+      last_media: media
     } satisfies ExportCheckpoint, null, 2), 'application/json');
   };
 
@@ -410,6 +430,8 @@ export async function exportChatHistory(options: ChatExportOptions) {
       }
     }))).filter(Boolean) as MyMessage[];
     const partName = `messages-${('0000' + ++partNumber).slice(-4)}`;
+    const pageStartExportedCount = exportedCount;
+    let pageHadFailures = false;
     const jsonWriter = formats.includes('json') ? await createWriter(exportDirectory, `${partName}.json`) : undefined;
     const htmlWriter = formats.includes('html') ? await createWriter(exportDirectory, `${partName}.html`) : undefined;
     let jsonFirst = true;
@@ -426,6 +448,13 @@ export async function exportChatHistory(options: ChatExportOptions) {
       onProgress?.({loaded: exportedCount, total, current: messageTime, phase: 'history'});
 
       const mediaType = getMediaType(message);
+      lastItem = {
+        type: mediaType || ('action' in message ? 'service' : 'message'),
+        message_id: message.mid,
+        date: new Date(timestamp).toISOString(),
+        status: 'pending'
+      };
+      let itemFailed = false;
       if(mediaType && options.mediaTypes.includes(mediaType)) {
         const media = getMediaFromMessage(message, true);
         const mediaSize = media ? getMediaSize(media as Photo.photo | Document.document) : undefined;
@@ -434,6 +463,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
           const mediaDirectory = await exportDirectory.getDirectoryHandle(mediaDirectoryName, {create: true});
           const extension = getMediaExtension(media as Photo.photo | Document.document);
           const fileName = `${message.mid}.${extension}`;
+          const mediaPath = `${mediaDirectoryName}/${fileName}`;
           onProgress?.({
             loaded: exportedCount,
             total,
@@ -441,10 +471,46 @@ export async function exportChatHistory(options: ChatExportOptions) {
             phase: 'history'
           });
           try {
-            const blob = await downloadMediaWithRetry(media as Photo.photo | Document.document, signal);
-            await writeBlob(mediaDirectory, fileName, blob);
-            exported.media = {type: mediaType, fileName: `${mediaDirectoryName}/${fileName}`};
+            const isInterruptedResumeItem = resumeItem?.message_id === message.mid &&
+              resumeItem.status !== 'completed';
+            let reuseMedia = completedMedia.has(mediaPath) &&
+              !failedMedia.has(mediaPath) &&
+              !isInterruptedResumeItem;
+            if(lastMedia?.path === mediaPath && lastMedia.message_id === message.mid) {
+              try {
+                const existingHandle = await mediaDirectory.getFileHandle(fileName);
+                const existingFile = await existingHandle.getFile?.();
+                reuseMedia = existingFile?.size === mediaSize;
+              } catch(error) {
+                if(!(error instanceof DOMException && error.name === 'NotFoundError')) throw error;
+                reuseMedia = false;
+              }
+            }
+
+            if(!reuseMedia) {
+              lastMedia = {path: mediaPath, message_id: message.mid, size: mediaSize};
+              lastFile = {...lastMedia, status: 'pending'};
+              lastItem = {...lastItem, path: mediaPath};
+              await writeCheckpoint('exporting', offsetId, lastMedia);
+              const blob = await downloadMediaWithRetry(media as Photo.photo | Document.document, signal);
+              await writeBlob(mediaDirectory, fileName, blob);
+              completedMedia.set(mediaPath, mediaSize);
+              failedMedia.delete(mediaPath);
+              lastFile = {...lastMedia, status: 'downloaded'};
+              lastItem = {...lastItem, status: 'completed'};
+              await writeCheckpoint('exporting', offsetId, lastMedia);
+            } else {
+              lastFile = {path: mediaPath, message_id: message.mid, size: mediaSize, status: 'downloaded'};
+              lastItem = {...lastItem, path: mediaPath, status: 'completed'};
+            }
+            exported.media = {type: mediaType, fileName: mediaPath};
           } catch(error) {
+            if(isCancelled(signal)) throw error;
+            pageHadFailures = true;
+            itemFailed = true;
+            failedMedia.set(mediaPath, {path: mediaPath, message_id: message.mid, size: mediaSize});
+            lastFile = {path: mediaPath, message_id: message.mid, size: mediaSize, status: 'failed'};
+            lastItem = {...lastItem, path: mediaPath, status: 'failed'};
             console.warn('[ChatExport] media download failed; continuing without media file', {
               peerId,
               mid: message.mid,
@@ -462,6 +528,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
           });
         }
       }
+      if(!itemFailed && lastItem?.status === 'pending') lastItem = {...lastItem, status: 'completed'};
       if(jsonWriter) {
         await jsonWriter.write(`${jsonFirst ? '' : ','}\n${JSON.stringify(exported)}`);
         jsonFirst = false;
@@ -481,8 +548,15 @@ export async function exportChatHistory(options: ChatExportOptions) {
       await htmlWriter.close();
       parts.push({path: `${partName}.html`, format: 'html', message_count: partCount});
     }
+    if(pageHadFailures) {
+      for(let index = parts.length - 1; index >= 0; index--) {
+        if(parts[index].path.startsWith(`${partName}.`)) parts.splice(index, 1);
+      }
+    }
     const lastId = messageIds[messageIds.length - 1];
-    await writeCheckpoint('exporting', lastId);
+    if(pageHadFailures) exportedCount = pageStartExportedCount;
+    lastMedia = undefined;
+    await writeCheckpoint('exporting', pageHadFailures ? offsetId : lastId, lastMedia);
     onProgress?.({loaded: exportedCount, total, phase: 'history'});
     if(!lastId || visitedOffsets.has(lastId)) break;
     visitedOffsets.add(lastId);
@@ -491,7 +565,8 @@ export async function exportChatHistory(options: ChatExportOptions) {
 
   onProgress?.({loaded: exportedCount, total, phase: 'writing'});
 
-  await writeCheckpoint('completed', null);
+  lastMedia = undefined;
+  await writeCheckpoint('completed', null, lastMedia);
 
   onProgress?.({loaded: exportedCount, total, phase: 'completed'});
 }
