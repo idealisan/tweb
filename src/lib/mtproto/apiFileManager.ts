@@ -54,7 +54,10 @@ export type DownloadOptions = {
   limitPart?: number,
   queueId?: number,
   onlyCache?: boolean,
-  downloadId?: string
+  downloadId?: string,
+  startOffset?: number,
+  skipCache?: boolean,
+  onPart?: (bytes: Uint8Array, offset: number) => Promise<void>
   // getFileMethod: Parameters<CacheStorageController['getFile']>[1]
 };
 
@@ -63,7 +66,10 @@ export type DownloadMediaOptions = {
   thumb?: PhotoSize | Extract<VideoSize, VideoSize.videoSize>,
   queueId?: number,
   onlyCache?: boolean,
-  downloadId?: string
+  downloadId?: string,
+  startOffset?: number,
+  skipCache?: boolean,
+  onPart?: DownloadOptions['onPart']
 };
 
 type DownloadPromise = CancellablePromise<Blob>;
@@ -695,7 +701,8 @@ export class ApiFileManager extends AppManager {
       getFile = downloadStorage.getFile.bind(downloadStorage);
     }
 
-    getFile(cacheFileName).then(async(blob: Blob) => {
+    const cachePromise = options.skipCache ? Promise.reject(new Error('Skip cache')) : getFile(cacheFileName);
+    cachePromise.then(async(blob: Blob) => {
       checkCancel();
 
       // if(blob.size < size) {
@@ -752,9 +759,9 @@ export class ApiFileManager extends AppManager {
 
       const throttledDispatchProgress = throttle(dispatchProgress, 50, true);
 
-      let done = 0;
+      let done = options.startOffset || 0;
       let _writePromise: CancellablePromise<void> = Promise.resolve(),
-        _offset = 0;
+        _offset = options.startOffset || 0;
       const superpuper = async() => {
         if(_offset && _offset > size) {
           return;
@@ -803,6 +810,7 @@ export class ApiFileManager extends AppManager {
 
             const perf = performance.now();
             await Promise.all(prepared.map(({writer}) => writer?.write(bytes, offset)));
+            await options.onPart?.(bytes, offset);
             checkCancel();
             downloadId && log('write time', performance.now() - perf, 'request time', requestTime, 'queue time', writeQueueTime);
           }
@@ -846,7 +854,7 @@ export class ApiFileManager extends AppManager {
         }
       };
 
-      for(let i = 0, length = clamp(size / limitPart, 1, maxRequests); i < length; ++i) {
+      for(let i = 0, length = clamp((size - _offset) / limitPart, 1, maxRequests); i < length; ++i) {
         superpuper();
       }
     }).catch(noop);

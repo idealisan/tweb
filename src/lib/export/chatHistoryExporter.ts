@@ -2,7 +2,6 @@ import type {MyMessage} from '../appManagers/appMessagesManager';
 import {HistoryType} from '../appManagers/appMessagesManager';
 import getPeerTitle from '../../components/wrappers/getPeerTitle';
 import rootScope from '../rootScope';
-import appDownloadManager from '../appManagers/appDownloadManager';
 import getMediaFromMessage from '../appManagers/utils/messages/getMediaFromMessage';
 import {Document, DocumentAttribute, Message, Photo} from '../../layer';
 
@@ -233,6 +232,7 @@ const downloadMediaToFile = async(
   media: Photo.photo | Document.document,
   directory: ExportDirectoryHandle,
   name: string,
+  expectedSize?: number,
   signal?: AbortSignal
 ) => {
   let lastError: unknown;
@@ -241,78 +241,59 @@ const downloadMediaToFile = async(
     const thumb = media._ === 'photo' ?
       media.sizes.filter((size) => size._ === 'photoSize' || size._ === 'photoSizeProgressive').at(-1) :
       undefined;
-    const download = appDownloadManager.downloadMediaURL({media, thumb});
-    let timer: number | undefined;
-    const fetchController = new AbortController();
+    const fileHandle = await directory.getFileHandle(name, {create: true});
+    const existingFile = await fileHandle.getFile?.();
+    let offset = existingFile?.size || 0;
+    if(expectedSize !== undefined && offset === expectedSize) return;
+    if(expectedSize !== undefined && offset > expectedSize) offset = 0;
     let writable: ExportWritable | undefined;
+    let writtenBytes = offset;
+    let uncommittedBytes = 0;
+    let timer: number | undefined;
+    let download: ReturnType<typeof rootScope.managers.apiFileManager.downloadMedia> | undefined;
+    const resetTimeout = () => {
+      if(timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        download?.cancel?.();
+      }, MEDIA_DOWNLOAD_TIMEOUT);
+    };
     const abortDownload = () => {
-      download.cancel?.();
-      fetchController.abort();
+      download?.cancel?.();
     };
     signal?.addEventListener('abort', abortDownload, {once: true});
     try {
-      const timeout = new Promise<never>((_, reject) => {
-        timer = window.setTimeout(() => {
-          abortDownload();
-          reject(new Error(`Media download timed out after ${MEDIA_DOWNLOAD_TIMEOUT / 1000}s`));
-        }, MEDIA_DOWNLOAD_TIMEOUT);
-      });
-      const url = await Promise.race([download, timeout]);
-      if(timer !== undefined) window.clearTimeout(timer);
-      timer = undefined;
-      const fileHandle = await directory.getFileHandle(name, {create: true});
-      const existingFile = await fileHandle.getFile?.();
-      let offset = existingFile?.size || 0;
-      let response = await fetch(url, {
-        headers: offset ? {Range: `bytes=${offset}-`} : undefined,
-        signal: fetchController.signal
-      });
-      if(response.status === 416 && offset) {
-        offset = 0;
-        const restartedResponse = await fetch(url, {signal: fetchController.signal});
-        if(!restartedResponse.ok) throw new Error(`Media request failed with HTTP ${restartedResponse.status}`);
-        response.body?.cancel();
-        response = restartedResponse;
-      }
-      if(!response.ok) throw new Error(`Media request failed with HTTP ${response.status}`);
-      if(offset && response.status !== 206) offset = 0;
-      const contentLength = Number(response.headers.get('content-length'));
-      const expectedFileSize = Number.isFinite(contentLength) && contentLength >= 0 ? offset + contentLength : undefined;
       writable = await fileHandle.createWritable({keepExistingData: offset > 0});
       if(offset && writable.seek) await writable.seek(offset);
-      let writtenBytes = offset;
-      let uncommittedBytes = 0;
-      const reader = response.body?.getReader();
-      if(!reader) throw new Error(`Media response has no readable body for ${name}`);
-      while(true) {
-        const chunk = await Promise.race([
-          reader.read(),
-          new Promise<never>((_, reject) => {
-            timer = window.setTimeout(() => {
-              abortDownload();
-              reject(new Error(`Media download stalled for ${MEDIA_DOWNLOAD_TIMEOUT / 1000}s`));
-            }, MEDIA_DOWNLOAD_TIMEOUT);
-          })
-        ]);
-        if(timer !== undefined) window.clearTimeout(timer);
-        if(chunk.done) break;
-        if(chunk.value) {
-          await writable.write(chunk.value);
-          writtenBytes += chunk.value.byteLength;
-          uncommittedBytes += chunk.value.byteLength;
+      resetTimeout();
+      download = rootScope.managers.apiFileManager.downloadMedia({
+        media,
+        thumb,
+        startOffset: offset,
+        skipCache: true,
+        onPart: async(bytes, partOffset) => {
+          resetTimeout();
+          const skipBytes = Math.max(0, writtenBytes - partOffset);
+          const data = skipBytes ? bytes.slice(skipBytes) : bytes;
+          if(!data.byteLength) return;
+          await writable?.write(data);
+          writtenBytes += data.byteLength;
+          uncommittedBytes += data.byteLength;
           if(uncommittedBytes >= MEDIA_WRITE_COMMIT_BYTES) {
-            await writable.close();
+            await writable?.close();
             writable = await fileHandle.createWritable({keepExistingData: true});
             if(writable.seek) await writable.seek(writtenBytes);
             uncommittedBytes = 0;
           }
         }
-      }
+      });
+      await download;
+      if(timer !== undefined) window.clearTimeout(timer);
+      timer = undefined;
       await writable.close();
       writable = undefined;
       const writtenFile = await fileHandle.getFile?.();
       if(writtenFile?.size === undefined || writtenFile.size === 0 ||
-        (expectedFileSize !== undefined && writtenFile.size !== expectedFileSize)) {
+        (expectedSize !== undefined && writtenFile.size !== expectedSize)) {
         throw new Error(`Media file is empty after download: ${name}`);
       }
       return;
@@ -553,7 +534,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
               lastFile = {...lastMedia, status: 'pending'};
               lastItem = {...lastItem, path: mediaPath};
               await writeCheckpoint('exporting', offsetId, lastMedia);
-              await downloadMediaToFile(media as Photo.photo | Document.document, mediaDirectory, fileName, signal);
+              await downloadMediaToFile(media as Photo.photo | Document.document, mediaDirectory, fileName, mediaSize, signal);
               completedMedia.set(mediaPath, mediaSize);
               failedMedia.delete(mediaPath);
               lastFile = {...lastMedia, status: 'downloaded'};

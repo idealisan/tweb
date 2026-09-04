@@ -14,7 +14,7 @@ import isWebFileLocation from '../webFiles/isWebFileLocation';
 import getDownloadFileNameFromOptions from './getDownloadFileNameFromOptions';
 
 export default function getDownloadMediaDetails(options: DownloadMediaOptions) {
-  const {media, thumb, queueId, onlyCache} = options;
+  const {media, thumb, queueId, onlyCache, startOffset, skipCache, onPart} = options;
 
   let downloadOptions: DownloadOptions;
   if(media._ === 'document') downloadOptions = getDocumentDownloadOptions(media, thumb as any, queueId, onlyCache);
@@ -23,6 +23,9 @@ export default function getDownloadMediaDetails(options: DownloadMediaOptions) {
   else if(isWebFileLocation(media)) downloadOptions = getWebFileDownloadOptions(media);
 
   downloadOptions.downloadId = options.downloadId;
+  downloadOptions.startOffset = startOffset;
+  downloadOptions.skipCache = skipCache;
+  downloadOptions.onPart = onPart;
 
   const fileName = getDownloadFileNameFromOptions(downloadOptions);
   return {fileName, downloadOptions};
