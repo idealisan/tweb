@@ -636,10 +636,10 @@ export default class ChatTopbar {
       }
 
       void confirmationPopup({
-        titleLangKey: 'ChatExport.CancelTitle',
-        descriptionLangKey: 'ChatExport.CancelText',
+        title: 'Cancel chat export?',
+        descriptionRaw: 'The current export will stop. Files already written will remain available and can be resumed later.',
         button: {
-          langKey: 'ChatExport.Cancel',
+          text: new Text('Stop export'),
           isDanger: true
         }
       }).then(() => {
