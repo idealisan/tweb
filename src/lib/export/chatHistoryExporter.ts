@@ -1,7 +1,7 @@
 import type {MyMessage} from '../appManagers/appMessagesManager';
 import {HistoryType} from '../appManagers/appMessagesManager';
 import getPeerTitle from '../../components/wrappers/getPeerTitle';
-import appDownloadManager from '../appManagers/appDownloadManager';
+import {downloadMediaParts} from './chatMediaPartDownloader';
 import rootScope from '../rootScope';
 import getMediaFromMessage from '../appManagers/utils/messages/getMediaFromMessage';
 import {Document, DocumentAttribute, Message, Photo} from '../../layer';
@@ -232,114 +232,28 @@ const makeHTMLMessage = (message: ExportedMessage) => {
 const downloadMediaToFile = async(
   media: Photo.photo | Document.document,
   directory: ExportDirectoryHandle,
-  name: string,
-  expectedSize?: number,
-  signal?: AbortSignal
+  name: string
 ) => {
-  let lastError: unknown;
-  for(let attempt = 0; attempt <= MEDIA_DOWNLOAD_RETRIES; attempt++) {
-    if(isCancelled(signal)) throw new DOMException('Export cancelled', 'AbortError');
-    const thumb = media._ === 'photo' ?
-      media.sizes.filter((size) => size._ === 'photoSize' || size._ === 'photoSizeProgressive').at(-1) :
-      undefined;
-    const fileHandle = await directory.getFileHandle(name, {create: true});
-    const existingFile = await fileHandle.getFile?.();
-    let offset = expectedSize !== undefined ? existingFile?.size || 0 : 0;
-    if(expectedSize !== undefined && offset === expectedSize) return;
-    if(expectedSize !== undefined && offset > expectedSize) offset = 0;
-    let writable: ExportWritable | undefined;
-    let writtenBytes = offset;
-    let uncommittedBytes = 0;
-    let receivedPart = false;
-    let timer: number | undefined;
-    let download: ReturnType<typeof rootScope.managers.apiFileManager.downloadMedia> | undefined;
-    const resetTimeout = () => {
-      if(timer !== undefined) window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        download?.cancel?.();
-      }, MEDIA_DOWNLOAD_TIMEOUT);
-    };
-    const abortDownload = () => {
-      download?.cancel?.();
-    };
-    signal?.addEventListener('abort', abortDownload, {once: true});
-    try {
-      writable = await fileHandle.createWritable({keepExistingData: offset > 0});
-      if(offset && writable.seek) await writable.seek(offset);
-      resetTimeout();
-      download = rootScope.managers.apiFileManager.downloadMedia({
-        media,
-        thumb,
-        startOffset: offset,
-        skipCache: true,
-        onPart: async(bytes, partOffset) => {
-          receivedPart = true;
-          resetTimeout();
-          const skipBytes = Math.max(0, writtenBytes - partOffset);
-          const data = skipBytes ? bytes.slice(skipBytes) : bytes;
-          if(!data.byteLength) return;
-          await writable?.write(data);
-          writtenBytes += data.byteLength;
-          uncommittedBytes += data.byteLength;
-          if(uncommittedBytes >= MEDIA_WRITE_COMMIT_BYTES) {
-            await writable?.close();
-            writable = await fileHandle.createWritable({keepExistingData: true});
-            if(writable.seek) await writable.seek(writtenBytes);
-            uncommittedBytes = 0;
-          }
-        }
-      });
-      await download;
-      if(timer !== undefined) window.clearTimeout(timer);
-      timer = undefined;
+  const fileHandle = await directory.getFileHandle(name, {create: true});
+  let writable = await fileHandle.createWritable();
+  let writtenBytes = 0;
+  let uncommittedBytes = 0;
+  const thumb = media._ === 'photo' ?
+    media.sizes.filter((size) => size._ === 'photoSize' || size._ === 'photoSizeProgressive').at(-1) :
+    undefined;
+
+  await downloadMediaParts(media, thumb, async(bytes) => {
+    await writable.write(bytes);
+    writtenBytes += bytes.byteLength;
+    uncommittedBytes += bytes.byteLength;
+    if(uncommittedBytes >= MEDIA_WRITE_COMMIT_BYTES) {
       await writable.close();
-      writable = undefined;
-      const writtenFile = await fileHandle.getFile?.();
-      if(writtenFile?.size === undefined || writtenFile.size === 0 ||
-        (expectedSize !== undefined && writtenFile.size !== expectedSize)) {
-        throw new Error(`Media file is empty after download: ${name}`);
-      }
-      return;
-    } catch(error) {
-      lastError = error;
-      try {
-        await writable?.close();
-      } catch(closeError) {
-        console.warn('[ChatExport] failed to commit partial media file', {name, closeError});
-      }
-      writable = undefined;
-      if(isCancelled(signal)) throw error;
-      console.warn('[ChatExport] segmented media download failed', {
-        name,
-        attempt: attempt + 1,
-        receivedPart,
-        error
-      });
-      if(attempt === MEDIA_DOWNLOAD_RETRIES) {
-        console.warn('[ChatExport] falling back to complete media download', {name});
-        const fallback = appDownloadManager.downloadMediaURL({media, thumb});
-        const abortFallback = () => fallback.cancel?.();
-        signal?.addEventListener('abort', abortFallback, {once: true});
-        try {
-          const url = await fallback;
-          const response = await fetch(url);
-          if(!response.ok) throw new Error(`Fallback media request failed with HTTP ${response.status}`);
-          const blob = await response.blob();
-          await writeBlob(directory, name, blob);
-          return;
-        } finally {
-          signal?.removeEventListener('abort', abortFallback);
-        }
-      }
-      if(attempt < MEDIA_DOWNLOAD_RETRIES) {
-        await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
-      }
-    } finally {
-      if(timer !== undefined) window.clearTimeout(timer);
-      signal?.removeEventListener('abort', abortDownload);
+      writable = await fileHandle.createWritable({keepExistingData: true});
+      if(writable.seek) await writable.seek(writtenBytes);
+      uncommittedBytes = 0;
     }
-  }
-  throw lastError;
+  });
+  await writable.close();
 };
 
 const writeFile = async(directory: ExportDirectoryHandle, name: string, data: string, type: string) => {
@@ -347,17 +261,6 @@ const writeFile = async(directory: ExportDirectoryHandle, name: string, data: st
   const writable = await handle.createWritable();
   await writable.write(new Blob([data], {type}));
   await writable.close();
-};
-
-const writeBlob = async(directory: ExportDirectoryHandle, name: string, blob: Blob) => {
-  const handle = await directory.getFileHandle(name, {create: true});
-  const writable = await handle.createWritable();
-  await writable.write(blob);
-  await writable.close();
-  const writtenFile = await handle.getFile?.();
-  if(writtenFile?.size !== undefined && writtenFile.size !== blob.size) {
-    throw new Error(`Media file size mismatch for ${name}: expected ${blob.size}, got ${writtenFile.size}`);
-  }
 };
 
 const createWriter = async(directory: ExportDirectoryHandle, name: string) => {
@@ -570,7 +473,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
               lastFile = {...lastMedia, status: 'pending'};
               lastItem = {...lastItem, path: mediaPath};
               await writeCheckpoint('exporting', offsetId, lastMedia);
-              await downloadMediaToFile(media as Photo.photo | Document.document, mediaDirectory, fileName, mediaSize, signal);
+              await downloadMediaToFile(media as Photo.photo | Document.document, mediaDirectory, fileName);
               completedMedia.set(mediaPath, mediaSize);
               failedMedia.delete(mediaPath);
               lastFile = {...lastMedia, status: 'downloaded'};
