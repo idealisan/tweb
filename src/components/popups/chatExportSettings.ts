@@ -93,7 +93,7 @@ export default class PopupChatExportSettings extends PopupElement {
       this.formatFields.push({format, field});
       this.appendCheckbox(format.toUpperCase(), field);
     });
-    this.formatFields[1].field.checked = true;
+    this.formatFields.forEach(({field}) => field.checked = true);
 
     this.directoryButton = document.createElement('button');
     this.directoryButton.className = 'btn-primary btn-color-primary chat-export-directory';
