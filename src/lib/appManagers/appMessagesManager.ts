@@ -248,7 +248,8 @@ export type RequestHistoryOptions = {
   fromPeerId?: PeerId,
   recursion?: boolean,                  // ! FOR INNER USE ONLY
   historyType?: HistoryType,            // ! FOR INNER USE ONLY
-  searchType?: 'cached' | 'uncached'    // ! FOR INNER USE ONLY
+  searchType?: 'cached' | 'uncached',       // ! FOR INNER USE ONLY
+  allowRestricted?: boolean              // ! FOR CHAT EXPORT ONLY
 };
 
 export type SearchStorageFilterKey = string;
@@ -7063,7 +7064,7 @@ export class AppMessagesManager extends AppManager {
 
     const {historyStorage, limit, addOffset, offsetId, needRealOffsetIdOffset} = options;
 
-    if(this.appPeersManager.isPeerRestricted(options.peerId)) {
+    if(!options.allowRestricted && this.appPeersManager.isPeerRestricted(options.peerId)) {
       const first = historyStorage.history.first;
       first.setEnd(SliceEnd.Both);
 

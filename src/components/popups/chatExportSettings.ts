@@ -61,6 +61,7 @@ export default class PopupChatExportSettings extends PopupElement {
     });
 
     const sizeLabel = document.createElement('label');
+    sizeLabel.className = 'chat-export-size';
     sizeLabel.textContent = 'Maximum media file size: ';
     const sizeValue = document.createElement('output');
     sizeValue.textContent = '10 MB';
@@ -129,7 +130,9 @@ export default class PopupChatExportSettings extends PopupElement {
   private chooseDirectory = async() => {
     try {
       this.directory = await pickExportDirectory();
-      this.directoryButton.textContent = 'Folder selected';
+      const name = this.directory.name || 'Selected folder';
+      this.directoryButton.textContent = `Folder: ${name}`;
+      this.directoryButton.title = name;
     } catch(error) {
       if((error as Error).message !== 'DIRECTORY_PICKER_UNSUPPORTED') throw error;
       toastNew({langPackKey: 'ChatExport.Unsupported'});

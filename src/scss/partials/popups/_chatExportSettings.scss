@@ -37,11 +37,48 @@
   }
 
   .chat-export-size {
-    flex-wrap: wrap;
+    display: block;
 
     input[type="range"] {
-      flex: 1 1 100%;
-      min-width: 12rem;
+      display: block;
+      width: 100%;
+      margin-top: .5rem;
+      height: 1.5rem;
+      appearance: none;
+      background: transparent;
+      cursor: pointer;
+
+      &::-webkit-slider-runnable-track {
+        height: .375rem;
+        border-radius: .25rem;
+        background: rgba(128, 128, 128, .45);
+      }
+
+      &::-webkit-slider-thumb {
+        width: 1.125rem;
+        height: 1.125rem;
+        margin-top: -.375rem;
+        appearance: none;
+        border: 2px solid var(--surface-color);
+        border-radius: 50%;
+        background: var(--primary-color);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+      }
+
+      &::-moz-range-track {
+        height: .375rem;
+        border-radius: .25rem;
+        background: rgba(128, 128, 128, .45);
+      }
+
+      &::-moz-range-thumb {
+        width: 1.125rem;
+        height: 1.125rem;
+        border: 2px solid var(--surface-color);
+        border-radius: 50%;
+        background: var(--primary-color);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+      }
     }
   }
 

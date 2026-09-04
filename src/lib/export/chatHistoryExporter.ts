@@ -10,6 +10,7 @@ export type ChatExportFormat = 'html' | 'json';
 export type ChatExportMediaType = 'photos' | 'videos' | 'voice' | 'video_notes' | 'stickers' | 'animated_gif' | 'files';
 
 export type ExportDirectoryHandle = {
+  readonly name?: string;
   getDirectoryHandle: (name: string, options?: {create?: boolean}) => Promise<ExportDirectoryHandle>;
   getFileHandle: (name: string, options?: {create?: boolean}) => Promise<{
     createWritable: () => Promise<{
@@ -163,7 +164,8 @@ export async function exportChatHistory(options: ChatExportOptions) {
       threadId,
       offsetId,
       limit: PAGE_SIZE,
-      historyType: threadId ? HistoryType.Thread : HistoryType.Chat
+      historyType: threadId ? HistoryType.Thread : HistoryType.Chat,
+      allowRestricted: true
     });
 
     total = result.count || total;
