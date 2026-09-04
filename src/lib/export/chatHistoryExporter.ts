@@ -77,6 +77,7 @@ const getLocalTimestamp = () => {
 const PAGE_SIZE = 100;
 const MEDIA_DOWNLOAD_TIMEOUT = 120000;
 const MEDIA_DOWNLOAD_RETRIES = 2;
+const MEDIA_WRITE_COMMIT_BYTES = 4 * 1024 * 1024;
 
 const escapeHTML = (value: string) => value
 .replace(/&/g, '&amp;')
@@ -279,6 +280,8 @@ const downloadMediaToFile = async(
       const expectedFileSize = Number.isFinite(contentLength) && contentLength >= 0 ? offset + contentLength : undefined;
       writable = await fileHandle.createWritable({keepExistingData: offset > 0});
       if(offset && writable.seek) await writable.seek(offset);
+      let writtenBytes = offset;
+      let uncommittedBytes = 0;
       const reader = response.body?.getReader();
       if(!reader) throw new Error(`Media response has no readable body for ${name}`);
       while(true) {
@@ -293,7 +296,17 @@ const downloadMediaToFile = async(
         ]);
         if(timer !== undefined) window.clearTimeout(timer);
         if(chunk.done) break;
-        if(chunk.value) await writable.write(chunk.value);
+        if(chunk.value) {
+          await writable.write(chunk.value);
+          writtenBytes += chunk.value.byteLength;
+          uncommittedBytes += chunk.value.byteLength;
+          if(uncommittedBytes >= MEDIA_WRITE_COMMIT_BYTES) {
+            await writable.close();
+            writable = await fileHandle.createWritable({keepExistingData: true});
+            if(writable.seek) await writable.seek(writtenBytes);
+            uncommittedBytes = 0;
+          }
+        }
       }
       await writable.close();
       writable = undefined;
