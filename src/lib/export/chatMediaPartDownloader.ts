@@ -24,7 +24,8 @@ export async function downloadMediaParts(
   media: DownloadableMedia,
   thumb: PhotoSize | undefined,
   onPart: PartCallback,
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  startOffset = 0
 ) {
   const source = media._ === 'document' ?
     await rootScope.managers.appDocsManager.getDoc(media.id) || media :
@@ -33,7 +34,8 @@ export async function downloadMediaParts(
     getDocumentDownloadOptions(source, undefined) :
     getPhotoDownloadOptions(source, thumb);
   const size = options.size || 0;
-  let offset = 0;
+  let offset = startOffset;
+  onProgress?.(offset, size || undefined);
 
   while(!size || offset < size) {
     let result;

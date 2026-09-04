@@ -18,7 +18,8 @@ export type ExportDirectoryHandle = {
     createWritable: (options?: {keepExistingData?: boolean}) => Promise<{
     write: (data: Blob | string | ArrayBuffer | Uint8Array) => Promise<void>;
       seek?: (position: number) => Promise<void>;
-      close: () => Promise<void>;
+    truncate?: (size: number) => Promise<void>;
+    close: () => Promise<void>;
     }>
   }>;
 };
@@ -234,16 +235,29 @@ const downloadMediaToFile = async(
   media: Photo.photo | Document.document,
   directory: ExportDirectoryHandle,
   name: string,
+  expectedSize?: number,
   onProgress?: (downloaded: number) => void
 ) => {
   const fileHandle = await directory.getFileHandle(name, {create: true});
-  let writable = await fileHandle.createWritable();
-  let writtenBytes = 0;
+  const existingFile = await fileHandle.getFile?.();
+  const existingSize = existingFile?.size || 0;
+  if(expectedSize !== undefined && existingSize === expectedSize) {
+    onProgress?.(existingSize);
+    return;
+  }
+  const offset = expectedSize !== undefined ?
+    Math.floor(Math.min(existingSize, expectedSize) / 524288) * 524288 :
+    0;
+  let writable = await fileHandle.createWritable({keepExistingData: offset > 0});
+  if(offset && writable.seek) await writable.seek(offset);
+  if(writable.truncate && offset !== existingSize) await writable.truncate(offset);
+  let writtenBytes = offset;
   let uncommittedBytes = 0;
   const thumb = media._ === 'photo' ?
     media.sizes.filter((size) => size._ === 'photoSize' || size._ === 'photoSizeProgressive').at(-1) :
     undefined;
 
+  onProgress?.(offset);
   await downloadMediaParts(media, thumb, async(bytes) => {
     await writable.write(bytes);
     writtenBytes += bytes.byteLength;
@@ -254,7 +268,7 @@ const downloadMediaToFile = async(
       if(writable.seek) await writable.seek(writtenBytes);
       uncommittedBytes = 0;
     }
-  }, onProgress ? (downloaded) => onProgress(downloaded) : undefined);
+  }, onProgress ? (downloaded) => onProgress(downloaded) : undefined, offset);
   await writable.close();
 };
 
@@ -479,6 +493,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
                 media as Photo.photo | Document.document,
                 mediaDirectory,
                 fileName,
+                mediaSize,
                 mediaSize !== undefined && mediaSize > MEDIA_PROGRESS_THRESHOLD ?
                   (downloaded) => onProgress?.({
                     loaded: exportedCount,
