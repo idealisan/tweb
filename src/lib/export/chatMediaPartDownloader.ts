@@ -8,6 +8,17 @@ const PART_SIZE = 512 * 1024;
 type DownloadableMedia = Photo.photo | Document.document;
 type PartCallback = (bytes: Uint8Array, offset: number) => Promise<void>;
 
+const getFloodWaitSeconds = (error: unknown) => {
+  const type = typeof error === 'object' && error && 'type' in error ? String(error.type) : '';
+  const message = error instanceof Error ? error.message : '';
+  const match = `${type} ${message}`.match(/FLOOD_WAIT[_ ](\d+)/i);
+  return match ? Number(match[1]) : undefined;
+};
+
+const waitForFloodWait = (seconds: number) => new Promise<void>((resolve) => {
+  window.setTimeout(resolve, seconds * 1000);
+});
+
 export async function downloadMediaParts(
   media: DownloadableMedia,
   thumb: PhotoSize | undefined,
@@ -23,14 +34,25 @@ export async function downloadMediaParts(
   let offset = 0;
 
   while(!size || offset < size) {
-    const result = await rootScope.managers.apiManager.invokeApi('upload.getFile', {
-      location: options.location as InputFileLocation,
-      offset,
-      limit: PART_SIZE
-    }, {
-      dcId: options.dcId,
-      fileDownload: true
-    });
+    let result;
+    while(true) {
+      try {
+        result = await rootScope.managers.apiManager.invokeApi('upload.getFile', {
+          location: options.location as InputFileLocation,
+          offset,
+          limit: PART_SIZE
+        }, {
+          dcId: options.dcId,
+          fileDownload: true
+        });
+        break;
+      } catch(error) {
+        const seconds = getFloodWaitSeconds(error);
+        if(seconds === undefined) throw error;
+        console.info(`[ChatExport] Telegram rate limit for media part; waiting ${seconds}s`);
+        await waitForFloodWait(seconds);
+      }
+    }
     const bytes = 'bytes' in result ? result.bytes as Uint8Array : undefined;
     if(!bytes?.byteLength) break;
     await onPart(bytes, offset);
