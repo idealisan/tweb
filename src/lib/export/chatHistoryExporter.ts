@@ -15,8 +15,9 @@ export type ExportDirectoryHandle = {
   getDirectoryHandle: (name: string, options?: {create?: boolean}) => Promise<ExportDirectoryHandle>;
   getFileHandle: (name: string, options?: {create?: boolean}) => Promise<{
     getFile?: () => Promise<{text: () => Promise<string>, size?: number}>;
-    createWritable: () => Promise<{
-    write: (data: Blob | string) => Promise<void>;
+    createWritable: (options?: {keepExistingData?: boolean}) => Promise<{
+    write: (data: Blob | string | ArrayBuffer | Uint8Array) => Promise<void>;
+      seek?: (position: number) => Promise<void>;
       close: () => Promise<void>;
     }>
   }>;
@@ -59,6 +60,12 @@ type ExportedMessage = {
 
 type DirectoryPickerWindow = Window & {
   showDirectoryPicker?: () => Promise<ExportDirectoryHandle>;
+};
+
+type ExportWritable = {
+  write: (data: Blob | string | ArrayBuffer | Uint8Array) => Promise<void>;
+  seek?: (position: number) => Promise<void>;
+  close: () => Promise<void>;
 };
 
 const getLocalTimestamp = () => {
@@ -221,8 +228,10 @@ const makeHTMLMessage = (message: ExportedMessage) => {
   return `<div class="message default clearfix" id="message${message.id}"><div class="body"><div class="pull_right date details" title="${escapeHTML(message.date)}">${escapeHTML(new Date(message.date).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}))}</div>${sender ? `<div class="from_name">${sender}</div>` : ''}${media}<div class="text">${text}</div></div></div>\n`;
 };
 
-const downloadMediaWithRetry = async(
+const downloadMediaToFile = async(
   media: Photo.photo | Document.document,
+  directory: ExportDirectoryHandle,
+  name: string,
   signal?: AbortSignal
 ) => {
   let lastError: unknown;
@@ -234,6 +243,7 @@ const downloadMediaWithRetry = async(
     const download = appDownloadManager.downloadMediaURL({media, thumb});
     let timer: number | undefined;
     const fetchController = new AbortController();
+    let writable: ExportWritable | undefined;
     const abortDownload = () => {
       download.cancel?.();
       fetchController.abort();
@@ -247,12 +257,61 @@ const downloadMediaWithRetry = async(
         }, MEDIA_DOWNLOAD_TIMEOUT);
       });
       const url = await Promise.race([download, timeout]);
-      return await Promise.race([fetch(url, {signal: fetchController.signal}).then((response) => {
-        if(!response.ok) throw new Error(`Media request failed with HTTP ${response.status}`);
-        return response.blob();
-      }), timeout]);
+      if(timer !== undefined) window.clearTimeout(timer);
+      timer = undefined;
+      const fileHandle = await directory.getFileHandle(name, {create: true});
+      const existingFile = await fileHandle.getFile?.();
+      let offset = existingFile?.size || 0;
+      let response = await fetch(url, {
+        headers: offset ? {Range: `bytes=${offset}-`} : undefined,
+        signal: fetchController.signal
+      });
+      if(response.status === 416 && offset) {
+        offset = 0;
+        const restartedResponse = await fetch(url, {signal: fetchController.signal});
+        if(!restartedResponse.ok) throw new Error(`Media request failed with HTTP ${restartedResponse.status}`);
+        response.body?.cancel();
+        response = restartedResponse;
+      }
+      if(!response.ok) throw new Error(`Media request failed with HTTP ${response.status}`);
+      if(offset && response.status !== 206) offset = 0;
+      const contentLength = Number(response.headers.get('content-length'));
+      const expectedFileSize = Number.isFinite(contentLength) && contentLength >= 0 ? offset + contentLength : undefined;
+      writable = await fileHandle.createWritable({keepExistingData: offset > 0});
+      if(offset && writable.seek) await writable.seek(offset);
+      const reader = response.body?.getReader();
+      if(!reader) throw new Error(`Media response has no readable body for ${name}`);
+      while(true) {
+        const chunk = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => {
+            timer = window.setTimeout(() => {
+              abortDownload();
+              reject(new Error(`Media download stalled for ${MEDIA_DOWNLOAD_TIMEOUT / 1000}s`));
+            }, MEDIA_DOWNLOAD_TIMEOUT);
+          })
+        ]);
+        if(timer !== undefined) window.clearTimeout(timer);
+        if(chunk.done) break;
+        if(chunk.value) await writable.write(chunk.value);
+      }
+      await writable.close();
+      writable = undefined;
+      const writtenFile = await fileHandle.getFile?.();
+      if(writtenFile?.size === undefined || writtenFile.size === 0 ||
+        (expectedFileSize !== undefined && writtenFile.size !== expectedFileSize)) {
+        throw new Error(`Media file is empty after download: ${name}`);
+      }
+      return;
     } catch(error) {
       lastError = error;
+      try {
+        await writable?.close();
+      } catch(closeError) {
+        console.warn('[ChatExport] failed to commit partial media file', {name, closeError});
+      }
+      writable = undefined;
+      if(isCancelled(signal)) throw error;
       if(attempt < MEDIA_DOWNLOAD_RETRIES) {
         await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
       }
@@ -269,17 +328,6 @@ const writeFile = async(directory: ExportDirectoryHandle, name: string, data: st
   const writable = await handle.createWritable();
   await writable.write(new Blob([data], {type}));
   await writable.close();
-};
-
-const writeBlob = async(directory: ExportDirectoryHandle, name: string, blob: Blob) => {
-  const handle = await directory.getFileHandle(name, {create: true});
-  const writable = await handle.createWritable();
-  await writable.write(blob);
-  await writable.close();
-  const writtenFile = await handle.getFile?.();
-  if(writtenFile?.size !== undefined && writtenFile.size !== blob.size) {
-    throw new Error(`Media file size mismatch for ${name}: expected ${blob.size}, got ${writtenFile.size}`);
-  }
 };
 
 const createWriter = async(directory: ExportDirectoryHandle, name: string) => {
@@ -492,8 +540,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
               lastFile = {...lastMedia, status: 'pending'};
               lastItem = {...lastItem, path: mediaPath};
               await writeCheckpoint('exporting', offsetId, lastMedia);
-              const blob = await downloadMediaWithRetry(media as Photo.photo | Document.document, signal);
-              await writeBlob(mediaDirectory, fileName, blob);
+              await downloadMediaToFile(media as Photo.photo | Document.document, mediaDirectory, fileName, signal);
               completedMedia.set(mediaPath, mediaSize);
               failedMedia.delete(mediaPath);
               lastFile = {...lastMedia, status: 'downloaded'};
