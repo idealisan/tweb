@@ -89,8 +89,14 @@
   }
 
   .chat-export-directory {
+    display: block;
     width: 100%;
     min-height: 2.5rem;
+    overflow: hidden;
+    padding: 0 .75rem;
+    text-align: start;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .chat-export-dates {

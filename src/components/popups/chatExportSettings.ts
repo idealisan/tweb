@@ -17,6 +17,7 @@ export default class PopupChatExportSettings extends PopupElement {
   private toDate?: Date;
   private formatFields: {format: ChatExportFormat, field: CheckboxField}[] = [];
   private mediaFields: {type: ChatExportMediaType, field: CheckboxField}[] = [];
+  private selectAllMediaField: CheckboxField;
   private maxMediaBytes = 2 ** 24;
 
   private appendCheckbox(title: string, field: CheckboxField) {
@@ -54,6 +55,11 @@ export default class PopupChatExportSettings extends PopupElement {
     this.body.append(mediaTitle);
 
     const mediaTypes: ChatExportMediaType[] = ['photos', 'videos', 'voice', 'video_notes', 'stickers', 'animated_gif', 'files'];
+    this.selectAllMediaField = new CheckboxField();
+    this.appendCheckbox('Select all', this.selectAllMediaField);
+    this.selectAllMediaField.input.addEventListener('change', () => {
+      this.mediaFields.forEach(({field}) => field.setValueSilently(this.selectAllMediaField.checked));
+    });
     MEDIA_OPTIONS.forEach((title, idx) => {
       const field = new CheckboxField();
       this.mediaFields.push({type: mediaTypes[idx], field});
@@ -172,7 +178,8 @@ export default class PopupChatExportSettings extends PopupElement {
       onProgress: (progress) => this.chat.topbar.updateExportProgress(progress)
     }).then(() => {
       this.chat.topbar.finishExportProgress(false);
-    }, () => {
+    }, (error) => {
+      console.error('[ChatExport] export failed', error);
       this.chat.topbar.finishExportProgress(true);
     });
 

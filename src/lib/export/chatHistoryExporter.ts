@@ -59,6 +59,8 @@ type DirectoryPickerWindow = Window & {
 };
 
 const PAGE_SIZE = 100;
+const MEDIA_DOWNLOAD_TIMEOUT = 120000;
+const MEDIA_DOWNLOAD_RETRIES = 2;
 
 const escapeHTML = (value: string) => value
 .replace(/&/g, '&amp;')
@@ -104,6 +106,17 @@ const getMediaType = (message: MyMessage): ChatExportMediaType | undefined => {
   return 'files';
 };
 
+const getMediaExtension = (media: Photo.photo | Document.document) => {
+  if(media._ === 'photo') return 'jpg';
+  const document = media as Document.document;
+  const filenameAttribute = document.attributes.find((attribute) => attribute._ === 'documentAttributeFilename') as {file_name?: string} | undefined;
+  const filename = filenameAttribute?.file_name;
+  const filenameExtension = filename?.split('.').pop()?.toLowerCase();
+  if(filenameExtension && filenameExtension !== filename?.toLowerCase()) return filenameExtension;
+  const mimeExtension = document.mime_type?.split('/').pop()?.toLowerCase();
+  return mimeExtension === 'jpeg' ? 'jpg' : mimeExtension || 'bin';
+};
+
 const getMessageText = (message: ExportedMessage) => {
   if(message.text) return message.text;
   if(message.service) return `[${message.service}]`;
@@ -114,7 +127,61 @@ const getMessageText = (message: ExportedMessage) => {
 const makeHTMLMessage = (message: ExportedMessage) => {
   const text = escapeHTML(getMessageText(message)).replace(/\n/g, '<br>');
   const sender = escapeHTML(message.senderName || (message.senderId ? '' + message.senderId : ''));
-  return `<div class="message default clearfix" id="message${message.id}"><div class="body"><div class="date details" title="${escapeHTML(message.date)}">${escapeHTML(new Date(message.date).toLocaleString())}</div>${sender ? `<div class="from_name">${sender}</div>` : ''}<div class="text">${text}</div></div></div>\n`;
+  let media = '';
+  if(message.media?.fileName) {
+    const fileName = escapeHTML(message.media.fileName);
+    if(message.media.type === 'photos') {
+      media = `<div class="media_wrap clearfix"><a href="${fileName}"><img src="${fileName}" class="media_photo"></a></div>`;
+    } else if(['videos', 'video_notes', 'animated_gif'].includes(message.media.type)) {
+      media = `<div class="media_wrap clearfix"><video controls preload="metadata" src="${fileName}"></video></div>`;
+    } else {
+      media = `<div class="media_wrap clearfix"><a href="${fileName}">${fileName.split('/').pop()}</a></div>`;
+    }
+  }
+  return `<div class="message default clearfix" id="message${message.id}"><div class="body"><div class="pull_right date details" title="${escapeHTML(message.date)}">${escapeHTML(new Date(message.date).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}))}</div>${sender ? `<div class="from_name">${sender}</div>` : ''}${media}<div class="text">${text}</div></div></div>\n`;
+};
+
+const downloadMediaWithRetry = async(
+  media: Photo.photo | Document.document,
+  signal?: AbortSignal
+) => {
+  let lastError: unknown;
+  for(let attempt = 0; attempt <= MEDIA_DOWNLOAD_RETRIES; attempt++) {
+    if(isCancelled(signal)) throw new DOMException('Export cancelled', 'AbortError');
+    const thumb = media._ === 'photo' ?
+      media.sizes.filter((size) => size._ === 'photoSize' || size._ === 'photoSizeProgressive').at(-1) :
+      undefined;
+    const download = appDownloadManager.downloadMediaURL({media, thumb});
+    let timer: number | undefined;
+    const fetchController = new AbortController();
+    const abortDownload = () => {
+      download.cancel?.();
+      fetchController.abort();
+    };
+    signal?.addEventListener('abort', abortDownload, {once: true});
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = window.setTimeout(() => {
+          abortDownload();
+          reject(new Error(`Media download timed out after ${MEDIA_DOWNLOAD_TIMEOUT / 1000}s`));
+        }, MEDIA_DOWNLOAD_TIMEOUT);
+      });
+      const url = await Promise.race([download, timeout]);
+      return await Promise.race([fetch(url, {signal: fetchController.signal}).then((response) => {
+        if(!response.ok) throw new Error(`Media request failed with HTTP ${response.status}`);
+        return response.blob();
+      }), timeout]);
+    } catch(error) {
+      lastError = error;
+      if(attempt < MEDIA_DOWNLOAD_RETRIES) {
+        await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+      }
+    } finally {
+      if(timer !== undefined) window.clearTimeout(timer);
+      signal?.removeEventListener('abort', abortDownload);
+    }
+  }
+  throw lastError;
 };
 
 const writeFile = async(directory: ExportDirectoryHandle, name: string, data: string, type: string) => {
@@ -169,8 +236,13 @@ export async function exportChatHistory(options: ChatExportOptions) {
     });
 
     total = result.count || total;
-    const page = (await Promise.all(result.history.map((mid: number) => {
-      return rootScope.managers.appMessagesManager.getMessageByPeer(peerId, mid);
+    const page = (await Promise.all(result.history.map(async(mid: number) => {
+      try {
+        return await rootScope.managers.appMessagesManager.getMessageByPeer(peerId, mid);
+      } catch(error) {
+        console.warn('[ChatExport] skipping unreadable message', {peerId, mid, error});
+        return undefined;
+      }
     }))).filter(Boolean) as MyMessage[];
     const partName = `messages-${('0000' + ++partNumber).slice(-4)}`;
     const jsonWriter = formats.includes('json') ? await createWriter(exportDirectory, `${partName}.json`) : undefined;
@@ -178,7 +250,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
     let jsonFirst = true;
     let partCount = 0;
     if(jsonWriter) await jsonWriter.write('[');
-    if(htmlWriter) await htmlWriter.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Exported Data</title><style>body{font-family:Arial,sans-serif;max-width:980px;margin:0 auto;padding:24px}.message{padding:8px 0;border-bottom:1px solid #eee}.date{float:right;color:#999;font-size:12px}.from_name{font-weight:600;margin-bottom:4px}.text{white-space:normal;overflow-wrap:anywhere}</style></head><body><div class="page_header">${escapeHTML(options.title)}</div><div class="history">`);
+    if(htmlWriter) await htmlWriter.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHTML(options.title)}</title><style>html,body{margin:0;padding:0;background:#fff;color:#222;font:14px Arial,sans-serif}.page_wrap{min-height:100vh}.page_header{padding:18px 24px;background:#517da2;color:#fff}.page_header .text{font-size:20px;font-weight:600}.page_body{max-width:980px;margin:0 auto;padding:24px}.message{position:relative;display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #e6e6e6}.body{min-width:0;flex:1}.date{float:right;color:#999;font-size:12px}.from_name{margin-bottom:5px;color:#517da2;font-weight:600}.text{white-space:normal;overflow-wrap:anywhere;line-height:1.45}.media_wrap{margin:6px 0}.media_photo{display:block;max-width:min(100%,640px);max-height:640px;border-radius:4px}.media_wrap video{display:block;max-width:min(100%,640px);max-height:640px}.media_wrap a{color:#517da2;text-decoration:none}.details{color:#999}</style></head><body><div class="page_wrap"><div class="page_header"><div class="content"><div class="text bold">${escapeHTML(options.title)}</div></div></div><div class="page_body chat_page"><div class="history">`);
 
     for(const message of page) {
       const timestamp = message.date * 1000;
@@ -193,11 +265,20 @@ export async function exportChatHistory(options: ChatExportOptions) {
         if(media && mediaSize <= options.maxMediaBytes) {
           const mediaDirectoryName = mediaType === 'photos' ? 'photos' : mediaType === 'videos' || mediaType === 'video_notes' || mediaType === 'animated_gif' ? 'video_files' : 'files';
           const mediaDirectory = await exportDirectory.getDirectoryHandle(mediaDirectoryName, {create: true});
-          const extension = media._ === 'photo' ? 'jpg' : media._ === 'document' ? 'bin' : 'dat';
+          const extension = getMediaExtension(media as Photo.photo | Document.document);
           const fileName = `${message.mid}.${extension}`;
-          const blob = await appDownloadManager.downloadMedia({media: media as Photo.photo | Document.document});
-          await writeBlob(mediaDirectory, fileName, blob);
-          exported.media = {type: mediaType, fileName: `${mediaDirectoryName}/${fileName}`};
+          try {
+            const blob = await downloadMediaWithRetry(media as Photo.photo | Document.document, signal);
+            await writeBlob(mediaDirectory, fileName, blob);
+            exported.media = {type: mediaType, fileName: `${mediaDirectoryName}/${fileName}`};
+          } catch(error) {
+            console.warn('[ChatExport] media download failed; continuing without media file', {
+              peerId,
+              mid: message.mid,
+              mediaType,
+              error
+            });
+          }
         }
       }
       if(jsonWriter) {
@@ -215,7 +296,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
       parts.push({path: `${partName}.json`, format: 'json', message_count: partCount});
     }
     if(htmlWriter) {
-      await htmlWriter.write('</div></body></html>');
+      await htmlWriter.write('</div></div></div></body></html>');
       await htmlWriter.close();
       parts.push({path: `${partName}.html`, format: 'html', message_count: partCount});
     }
