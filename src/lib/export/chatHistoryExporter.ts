@@ -44,6 +44,11 @@ export type ChatExportProgress = {
   loaded: number;
   total?: number;
   current?: string;
+  activeFiles?: {
+    path: string;
+    downloaded: number;
+    size?: number;
+  }[];
   phase: 'history' | 'writing' | 'completed' | 'cancelled' | 'failed';
 };
 
@@ -457,6 +462,14 @@ export async function exportChatHistory(options: ChatExportOptions) {
   const resumeItem = canResume ? checkpoint.last_item : undefined;
   let checkpointWritePromise = Promise.resolve();
   const pageAttempts = new Map<number, number>();
+  const reportProgress = (progress: Omit<ChatExportProgress, 'activeFiles'>) => {
+    onProgress?.({
+      ...progress,
+      activeFiles: Array.from(activeFiles.values())
+      .filter((file) => file.status === 'downloading')
+      .map(({path, downloaded, size}) => ({path, downloaded, size}))
+    });
+  };
 
   const writeCheckpoint = (
     status: ExportCheckpoint['status'],
@@ -496,7 +509,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
       limit: PAGE_SIZE,
       historyType: threadId ? HistoryType.Thread : HistoryType.Chat
     }, signal, (seconds) => {
-      onProgress?.({loaded: exportedCount, total, current: `Telegram 限流，等待 ${seconds} 秒`, phase: 'history'});
+      reportProgress({loaded: exportedCount, total, current: `Telegram 限流，等待 ${seconds} 秒`, phase: 'history'});
     });
 
     const rawMessages = result.messages || [];
@@ -543,7 +556,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
       if(options.toDate && timestamp > options.toDate.getTime()) return;
       const exported = normalizeMessage(message);
       const messageTime = new Date(timestamp).toLocaleString();
-      onProgress?.({loaded: exportedCount, total, current: messageTime, phase: 'history'});
+      reportProgress({loaded: exportedCount, total, current: messageTime, phase: 'history'});
       const mediaType = getMediaType(message);
       let itemFailed = false;
       let mediaPath: string | undefined;
@@ -556,7 +569,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
           const extension = getMediaExtension(media as Photo.photo | Document.document);
           const fileName = `${message.mid}.${extension}`;
           mediaPath = `${mediaDirectoryName}/${fileName}`;
-          onProgress?.({loaded: exportedCount, total, current: `${fileName} (${formatMediaSize(mediaSize)})`, phase: 'history'});
+          reportProgress({loaded: exportedCount, total, current: `${fileName} (${formatMediaSize(mediaSize)})`, phase: 'history'});
           try {
             const existingHandle = await mediaDirectory.getFileHandle(fileName, {create: true});
             const existingFile = await existingHandle.getFile?.();
@@ -574,6 +587,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
               });
               activeFiles.get(mediaPath)!.status = 'downloading';
               await writeCheckpoint('exporting', offsetId, pageStartExportedCount);
+              reportProgress({loaded: exportedCount, total, current: fileName, phase: 'history'});
               await downloadMediaToFile(
                 media as Photo.photo | Document.document,
                 mediaDirectory,
@@ -583,7 +597,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
                   (downloaded) => {
                     const current = activeFiles.get(mediaPath!);
                     if(current) current.downloaded = downloaded;
-                    onProgress?.({loaded: exportedCount, total, current: `${fileName} (${formatMediaSize(downloaded)} / ${formatMediaSize(mediaSize)})`, phase: 'history'});
+                    reportProgress({loaded: exportedCount, total, current: fileName, phase: 'history'});
                   } :
                   (downloaded) => {
                     const current = activeFiles.get(mediaPath!);
@@ -593,6 +607,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
               activeFiles.set(mediaPath, {...activeFiles.get(mediaPath)!, downloaded: mediaSize || existingSize, status: 'downloaded'});
               completedMedia.set(mediaPath, mediaSize);
               failedMedia.delete(mediaPath);
+              reportProgress({loaded: exportedCount, total, current: fileName, phase: 'history'});
               await writeCheckpoint('exporting', offsetId, pageStartExportedCount);
             } else {
               activeFiles.set(mediaPath, {
@@ -617,6 +632,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
             const current = activeFiles.get(mediaPath) || {path: mediaPath, message_id: message.mid, size: mediaSize, downloaded: 0, status: 'pending' as const};
             activeFiles.set(mediaPath, {...current, status: 'failed'});
             failedMedia.set(mediaPath, {path: mediaPath, message_id: message.mid, size: mediaSize});
+            reportProgress({loaded: exportedCount, total, current: fileName, phase: 'history'});
             await writeCheckpoint('exporting', offsetId, pageStartExportedCount);
             console.warn('[ChatExport] media download failed; continuing without media file', {peerId, mid: message.mid, mediaType, error});
           }
@@ -685,17 +701,17 @@ export async function exportChatHistory(options: ChatExportOptions) {
     const lastId = messageIds[messageIds.length - 1];
     pageAttempts.delete(offsetId);
     await writeCheckpoint('exporting', lastId);
-    onProgress?.({loaded: exportedCount, total, phase: 'history'});
+    reportProgress({loaded: exportedCount, total, phase: 'history'});
     if(!lastId || visitedOffsets.has(lastId)) break;
     visitedOffsets.add(lastId);
     offsetId = lastId;
   }
 
-  onProgress?.({loaded: exportedCount, total, phase: 'writing'});
+  reportProgress({loaded: exportedCount, total, phase: 'writing'});
 
   await writeCheckpoint('completed', null);
 
-  onProgress?.({loaded: exportedCount, total, phase: 'completed'});
+  reportProgress({loaded: exportedCount, total, phase: 'completed'});
 }
 
 export async function getExportTitle(peerId: PeerId) {

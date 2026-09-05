@@ -453,6 +453,7 @@ body.is-right-column-shown {
   color: var(--secondary-text-color);
   font-size: 12px;
   background: var(--surface-color);
+  cursor: pointer;
 }
 
 .chat-export-progress-text {
@@ -468,23 +469,84 @@ body.is-right-column-shown {
   transition: width .2s ease;
 }
 
-.chat-export-progress-close {
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  margin-inline-start: 8px;
-  padding: 0;
-  border: 0;
-  color: var(--secondary-text-color);
-  background: transparent;
-  cursor: pointer;
-  font-size: 20px;
-  line-height: 20px;
-  opacity: .7;
+.chat-export-progress-details {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 6px);
+  inset-inline-start: 0;
+  width: min(420px, calc(100vw - 24px));
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--surface-color);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, .18);
+  cursor: default;
+}
 
-  &:hover {
-    opacity: 1;
-  }
+.chat-export-progress-details-title {
+  margin-bottom: 10px;
+  color: var(--primary-text-color);
+  font-weight: 600;
+}
+
+.chat-export-progress-details-list {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.chat-export-progress-file {
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.chat-export-progress-file:last-child {
+  margin-bottom: 0;
+}
+
+.chat-export-progress-file-name,
+.chat-export-progress-file-text {
+  overflow: hidden;
+  color: var(--secondary-text-color);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-export-progress-file-name {
+  color: var(--primary-text-color);
+}
+
+.chat-export-progress-file-bar {
+  height: 3px;
+  margin-top: 5px;
+  border-radius: 2px;
+  background: var(--primary-color);
+  transition: width .2s ease;
+}
+
+.chat-export-progress-details-empty {
+  margin: 4px 0 12px;
+  color: var(--secondary-text-color);
+  font-size: 12px;
+}
+
+.chat-export-progress-details-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.chat-export-progress-details-buttons .btn {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 6px;
+}
+
+.chat-export-progress-cancel {
+  color: var(--white);
+  background: var(--danger-color);
 }
 
 .chat-export-progress.is-failed .chat-export-progress-bar {

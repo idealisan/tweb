@@ -110,7 +110,13 @@ export default class ChatTopbar {
   private exportProgress: HTMLElement;
   private exportProgressBar: HTMLElement;
   private exportProgressText: HTMLElement;
+  private exportDetailsPanel: HTMLElement;
+  private exportDetailsList: HTMLElement;
+  private exportDetailsEmpty: HTMLElement;
+  private exportCancelButton: HTMLButtonElement;
+  private exportDetailRows = new Map<string, {row: HTMLElement, progress: HTMLElement, bar: HTMLElement}>();
   private exportAbortController: AbortController;
+  private exportTitle = '';
   private exportActive = false;
 
   private titleMiddlewareHelper: MiddlewareHelper;
@@ -613,64 +619,163 @@ export default class ChatTopbar {
 
   public startExportProgress(title: string, abortController: AbortController) {
     this.exportProgress?.remove();
+    this.exportDetailsPanel?.remove();
+    this.exportDetailRows.clear();
     this.exportActive = true;
+    this.exportTitle = title;
     this.exportAbortController = abortController;
     this.exportProgress = document.createElement('div');
     this.exportProgress.className = 'chat-export-progress';
+    this.exportProgress.setAttribute('role', 'button');
+    this.exportProgress.tabIndex = 0;
+    this.exportProgress.setAttribute('aria-label', I18n.format('ChatExport.ShowDetails', true));
     this.exportProgressText = document.createElement('div');
     this.exportProgressText.className = 'chat-export-progress-text';
-    this.exportProgressText.textContent = `正在导出 ${title} 0 / --`;
+    this.exportProgressText.textContent = I18n.format('ChatExport.Progress', true, [title, 0, '--']);
     this.exportProgressBar = document.createElement('div');
     this.exportProgressBar.className = 'chat-export-progress-bar';
     this.exportProgressText.append(this.exportProgressBar);
-    const closeButton = document.createElement('button');
-    closeButton.className = 'chat-export-progress-close';
-    closeButton.type = 'button';
-    closeButton.textContent = '×';
-    closeButton.setAttribute('aria-label', 'Close export status');
-    closeButton.addEventListener('click', () => {
-      if(!this.exportActive) {
-        this.exportProgress?.remove();
-        this.exportProgress = undefined;
-        return;
+    this.exportProgress.append(this.exportProgressText);
+    this.exportProgress.addEventListener('click', () => this.toggleExportDetails());
+    this.exportProgress.addEventListener('keydown', (event) => {
+      if(event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        this.toggleExportDetails();
       }
-
-      void confirmationPopup({
-        title: 'Cancel chat export?',
-        descriptionRaw: 'The current export will stop. Files already written will remain available and can be resumed later.',
-        button: {
-          text: new Text('Stop export'),
-          isDanger: true
-        }
-      }).then(() => {
-        this.exportAbortController?.abort();
-        this.exportProgress?.remove();
-        this.exportProgress = undefined;
-      }).catch(() => {});
     });
-    this.exportProgress.append(this.exportProgressText, closeButton);
+
+    this.exportDetailsPanel = document.createElement('div');
+    this.exportDetailsPanel.className = 'chat-export-progress-details hide';
+    this.exportDetailsPanel.setAttribute('role', 'dialog');
+    this.exportDetailsPanel.setAttribute('aria-label', I18n.format('ChatExport.Details', true));
+    this.exportDetailsPanel.addEventListener('click', (event) => event.stopPropagation());
+    const detailsTitle = document.createElement('div');
+    detailsTitle.className = 'chat-export-progress-details-title';
+    detailsTitle.textContent = I18n.format('ChatExport.Details', true);
+    this.exportDetailsList = document.createElement('div');
+    this.exportDetailsList.className = 'chat-export-progress-details-list';
+    this.exportDetailsEmpty = document.createElement('div');
+    this.exportDetailsEmpty.className = 'chat-export-progress-details-empty';
+    this.exportDetailsEmpty.textContent = I18n.format('ChatExport.NoActiveFiles', true);
+    const detailsButtons = document.createElement('div');
+    detailsButtons.className = 'chat-export-progress-details-buttons';
+    const hideButton = document.createElement('button');
+    hideButton.className = 'btn chat-export-progress-hide';
+    hideButton.type = 'button';
+    hideButton.textContent = I18n.format('ChatExport.Hide', true);
+    hideButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.hideExportDetails();
+    });
+    this.exportCancelButton = document.createElement('button');
+    this.exportCancelButton.className = 'btn danger chat-export-progress-cancel';
+    this.exportCancelButton.type = 'button';
+    this.exportCancelButton.textContent = I18n.format('ChatExport.CancelExport', true);
+    this.exportCancelButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void this.confirmCancelExport();
+    });
+    detailsButtons.append(hideButton, this.exportCancelButton);
+    this.exportDetailsPanel.append(detailsTitle, this.exportDetailsList, this.exportDetailsEmpty, detailsButtons);
+    this.exportProgress.append(this.exportDetailsPanel);
     this.container.before(this.exportProgress);
   }
 
   public updateExportProgress(progress: ChatExportProgress) {
     if(!this.exportProgress) return;
     const total = progress.total || 0;
-    const current = progress.current ? ` · ${progress.current}` : '';
-    this.exportProgressText.textContent = `正在导出 ${this.title.textContent || ''} ${progress.loaded} / ${total || '--'}${current}`;
+    this.exportProgressText.textContent = I18n.format('ChatExport.Progress', true, [
+      this.exportTitle || this.title.textContent || '',
+      progress.loaded,
+      total || '--'
+    ]);
     this.exportProgressText.append(this.exportProgressBar);
     this.exportProgressBar.style.width = total ? `${Math.min(100, progress.loaded / total * 100)}%` : '0%';
+    this.updateExportDetails(progress.activeFiles || []);
   }
 
   public finishExportProgress(failed: boolean) {
     this.exportActive = false;
+    this.exportCancelButton?.classList.add('hide');
+    this.updateExportDetails([]);
     if(!this.exportProgress) {
       this.exportAbortController = undefined;
       return;
     }
     this.exportProgress.classList.toggle('is-failed', failed);
-    this.exportProgressText.textContent = failed ? '聊天导出失败' : '聊天导出完成';
+    this.exportProgressText.textContent = I18n.format(failed ? 'ChatExport.Failed' : 'ChatExport.Completed', true);
     this.exportProgressText.append(this.exportProgressBar);
     this.exportAbortController = undefined;
+  }
+
+  private hideExportDetails() {
+    this.exportDetailsPanel?.classList.add('hide');
+  }
+
+  private toggleExportDetails() {
+    this.exportDetailsPanel?.classList.toggle('hide');
+  }
+
+  private async confirmCancelExport() {
+    if(!this.exportActive) return;
+    await confirmationPopup({
+      titleLangKey: 'ChatExport.CancelTitle',
+      descriptionLangKey: 'ChatExport.CancelText',
+      button: {
+        langKey: 'ChatExport.Cancel',
+        isDanger: true
+      }
+    }).then(() => {
+      this.exportAbortController?.abort();
+      this.hideExportDetails();
+    }).catch(() => {});
+  }
+
+  private updateExportDetails(files: NonNullable<ChatExportProgress['activeFiles']>) {
+    if(!this.exportDetailsList) return;
+    const activePaths = new Set(files.map((file) => file.path));
+    for(const [path, detail] of this.exportDetailRows) {
+      if(!activePaths.has(path)) {
+        detail.row.remove();
+        this.exportDetailRows.delete(path);
+      }
+    }
+
+    files.forEach((file) => {
+      let detail = this.exportDetailRows.get(file.path);
+      if(!detail) {
+        const row = document.createElement('div');
+        row.className = 'chat-export-progress-file';
+        const name = document.createElement('div');
+        name.className = 'chat-export-progress-file-name';
+        name.textContent = file.path;
+        const progress = document.createElement('div');
+        progress.className = 'chat-export-progress-file-text';
+        const bar = document.createElement('div');
+        bar.className = 'chat-export-progress-file-bar';
+        row.append(name, progress, bar);
+        this.exportDetailsList.append(row);
+        detail = {row, progress, bar};
+        this.exportDetailRows.set(file.path, detail);
+      }
+
+      const downloaded = this.formatExportBytes(file.downloaded);
+      const size = file.size === undefined ? '--' : this.formatExportBytes(file.size);
+      detail.progress.textContent = I18n.format('ChatExport.FileProgress', true, [downloaded, size]);
+      detail.bar.style.width = file.size ? `${Math.min(100, file.downloaded / file.size * 100)}%` : '0%';
+    });
+    this.exportDetailsEmpty.classList.toggle('hide', files.length > 0);
+  }
+
+  private formatExportBytes(bytes: number) {
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let value = Math.max(0, bytes);
+    let unit = 0;
+    while(value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    return `${value.toFixed(unit ? value >= 10 ? 1 : 2 : 0)} ${units[unit]}`;
   }
 
   public addContact() {
