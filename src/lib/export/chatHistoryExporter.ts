@@ -369,7 +369,6 @@ export async function exportChatHistory(options: ChatExportOptions) {
   let offsetId = canResume ? checkpoint.next_offset_id : 0;
   let total: number | undefined;
   const visitedOffsets = new Set<number>();
-  const exportedMessageIds = new Set<number>();
   let lastMedia = canResume ? checkpoint.last_media : undefined;
   const completedMedia = new Map((canResume ? checkpoint.media_files || [] : []).map((file) => [file.path, file.size]));
   const failedMedia = new Map((canResume ? checkpoint.failed_media || [] : []).map((file) => [file.path, file]));
@@ -431,11 +430,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
         console.warn('[ChatExport] skipping unreadable message', {peerId, mid, error});
         return undefined;
       }
-    }))).filter((message): message is MyMessage => {
-      if(!message || exportedMessageIds.has(message.mid)) return false;
-      exportedMessageIds.add(message.mid);
-      return true;
-    });
+    }))).filter(Boolean) as MyMessage[];
     const partName = `messages-${('0000' + ++partNumber).slice(-4)}`;
     const pageStartExportedCount = exportedCount;
     let pageHadFailures = false;
