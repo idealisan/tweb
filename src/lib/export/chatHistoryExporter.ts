@@ -89,6 +89,7 @@ const MEDIA_DOWNLOAD_RETRIES = 2;
 const MEDIA_WRITE_COMMIT_BYTES = 4 * 1024 * 1024;
 const MEDIA_PROGRESS_THRESHOLD = 10 * 1024 * 1024;
 const MEDIA_DOWNLOAD_CONCURRENCY = 3;
+const MEDIA_PAGE_RETRIES = 3;
 
 const escapeHTML = (value: string) => value
 .replace(/&/g, '&amp;')
@@ -421,6 +422,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
   let lastItem = canResume ? checkpoint.last_item : undefined;
   const resumeItem = canResume ? checkpoint.last_item : undefined;
   let checkpointWritePromise = Promise.resolve();
+  const pageAttempts = new Map<number, number>();
 
   const writeCheckpoint = (
     status: ExportCheckpoint['status'],
@@ -491,6 +493,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
     const partName = `messages-${formatExportDate(firstDate)}_to_${formatExportDate(lastDate)}-${('0000' + ++partNumber).slice(-4)}`;
     const pageStartExportedCount = exportedCount;
     let pageHadFailures = false;
+    let pageFailureError: unknown;
     const jsonWriter = formats.includes('json') ? await createWriter(exportDirectory, `${partName}.json`) : undefined;
     const htmlWriter = formats.includes('html') ? await createWriter(exportDirectory, `${partName}.html`) : undefined;
     let jsonFirst = true;
@@ -575,6 +578,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
               await mediaDirectory.removeEntry(fileName);
             }
             pageHadFailures = true;
+            pageFailureError = error;
             itemFailed = true;
             const current = activeFiles.get(mediaPath) || {path: mediaPath, message_id: message.mid, size: mediaSize, downloaded: 0, status: 'pending' as const};
             activeFiles.set(mediaPath, {...current, status: 'failed'});
@@ -619,21 +623,34 @@ export async function exportChatHistory(options: ChatExportOptions) {
     if(jsonWriter) {
       await jsonWriter.write(']');
       await jsonWriter.close();
-      parts.push({path: `${partName}.json`, format: 'json', message_count: partCount});
+      if(!pageHadFailures) {
+        parts.push({path: `${partName}.json`, format: 'json', message_count: partCount});
+      }
     }
     if(htmlWriter) {
       await htmlWriter.write('</div></div></div></body></html>');
       await htmlWriter.close();
-      parts.push({path: `${partName}.html`, format: 'html', message_count: partCount});
-    }
-    if(pageHadFailures) {
-      for(let index = parts.length - 1; index >= 0; index--) {
-        if(parts[index].path.startsWith(`${partName}.`)) parts.splice(index, 1);
+      if(!pageHadFailures) {
+        parts.push({path: `${partName}.html`, format: 'html', message_count: partCount});
       }
     }
+    if(pageHadFailures) {
+      for(const format of formats) {
+        await exportDirectory.removeEntry?.(`${partName}.${format}`);
+      }
+      exportedCount = pageStartExportedCount;
+      const attempts = (pageAttempts.get(offsetId) || 0) + 1;
+      pageAttempts.set(offsetId, attempts);
+      await writeCheckpoint('exporting', offsetId);
+      if(attempts >= MEDIA_PAGE_RETRIES) {
+        const reason = pageFailureError instanceof Error ? pageFailureError.message : String(pageFailureError);
+        throw new Error(`MEDIA_PAGE_FAILED_AFTER_${attempts}_ATTEMPTS: ${reason}`);
+      }
+      continue;
+    }
     const lastId = messageIds[messageIds.length - 1];
-    if(pageHadFailures) exportedCount = pageStartExportedCount;
-    await writeCheckpoint('exporting', pageHadFailures ? offsetId : lastId);
+    pageAttempts.delete(offsetId);
+    await writeCheckpoint('exporting', lastId);
     onProgress?.({loaded: exportedCount, total, phase: 'history'});
     if(!lastId || visitedOffsets.has(lastId)) break;
     visitedOffsets.add(lastId);
