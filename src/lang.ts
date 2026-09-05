@@ -145,7 +145,7 @@ const lang = {
   'Message.Context.Selection.Delete': 'Delete selected',
   'Message.Context.Selection.Forward': 'Forward selected',
   'Message.Context.SaveToSavedMessages': 'Forward to Saved Messages',
-  'Message.Context.SaveLinkToSavedMessages': 'Forward Message Link to Saved Messages',
+  'Message.Context.SaveLinkToSavedMessages': 'Forward Link to Saved Messages',
   'Message.Context.Selection.Download': 'Download selected',
   'Message.Context.Selection.SendNow': 'Send selected now',
   'Message.Unsupported.Desktop': '__This message is currently not supported on Telegram Web. Try [getdesktop.telegram.org](https://getdesktop.telegram.org/)__',
