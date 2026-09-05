@@ -470,11 +470,13 @@ body.is-right-column-shown {
 }
 
 .chat-export-progress-details {
-  position: absolute;
-  z-index: 10;
-  top: calc(100% + 6px);
-  inset-inline-start: 0;
+  position: fixed;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   width: min(420px, calc(100vw - 24px));
+  max-height: calc(100vh - 2rem);
   box-sizing: border-box;
   padding: 12px;
   border: 1px solid var(--border-color);
@@ -491,7 +493,7 @@ body.is-right-column-shown {
 }
 
 .chat-export-progress-details-list {
-  max-height: 240px;
+  max-height: min(240px, calc(100vh - 12rem));
   overflow-y: auto;
 }
 
@@ -542,11 +544,13 @@ body.is-right-column-shown {
   min-height: 32px;
   padding: 0 12px;
   border-radius: 6px;
+  color: var(--primary-text-color);
+  background-color: var(--light-secondary-text-color);
 }
 
 .chat-export-progress-cancel {
-  color: var(--white);
-  background: var(--danger-color);
+  color: var(--white) !important;
+  background-color: var(--danger-color) !important;
 }
 
 .chat-export-progress.is-failed .chat-export-progress-bar {

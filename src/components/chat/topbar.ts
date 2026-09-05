@@ -668,7 +668,7 @@ export default class ChatTopbar {
       this.hideExportDetails();
     });
     this.exportCancelButton = document.createElement('button');
-    this.exportCancelButton.className = 'btn danger chat-export-progress-cancel';
+    this.exportCancelButton.className = 'btn chat-export-progress-cancel';
     this.exportCancelButton.type = 'button';
     this.exportCancelButton.textContent = I18n.format('ChatExport.CancelExport', true);
     this.exportCancelButton.addEventListener('click', (event) => {
@@ -677,7 +677,7 @@ export default class ChatTopbar {
     });
     detailsButtons.append(hideButton, this.exportCancelButton);
     this.exportDetailsPanel.append(detailsTitle, this.exportDetailsList, this.exportDetailsEmpty, detailsButtons);
-    this.exportProgress.append(this.exportDetailsPanel);
+    document.body.append(this.exportDetailsPanel);
     this.container.before(this.exportProgress);
   }
 
