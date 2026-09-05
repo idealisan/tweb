@@ -224,9 +224,20 @@ const getMessageText = (message: ExportedMessage) => {
   return '';
 };
 
+const formatMessageDate = (date: string) => new Date(date).toLocaleString([], {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false
+});
+
 const makeHTMLMessage = (message: ExportedMessage) => {
   const text = escapeHTML(getMessageText(message)).replace(/\n/g, '<br>');
   const sender = escapeHTML(message.senderName || (message.senderId ? '' + message.senderId : ''));
+  const messageDate = formatMessageDate(message.date);
   let media = '';
   if(message.media?.fileName) {
     const fileName = escapeHTML(message.media.fileName);
@@ -238,7 +249,7 @@ const makeHTMLMessage = (message: ExportedMessage) => {
       media = `<div class="media_wrap clearfix"><a href="${fileName}">${fileName.split('/').pop()}</a></div>`;
     }
   }
-  return `<div class="message default clearfix" id="message${message.id}"><div class="body"><div class="pull_right date details" title="${escapeHTML(message.date)}">${escapeHTML(new Date(message.date).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}))}</div>${sender ? `<div class="from_name">${sender}</div>` : ''}${media}<div class="text">${text}</div></div></div>\n`;
+  return `<div class="message default clearfix" id="message${message.id}"><div class="body"><div class="pull_right date details" title="${escapeHTML(message.date)}">${escapeHTML(messageDate)}</div>${sender ? `<div class="from_name">${sender}</div>` : ''}${media}<div class="text">${text}</div></div></div>\n`;
 };
 
 const downloadMediaToFile = async(
@@ -499,7 +510,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
     let jsonFirst = true;
     let partCount = 0;
     if(jsonWriter) await jsonWriter.write('[');
-    if(htmlWriter) await htmlWriter.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHTML(options.title)}</title><style>html,body{margin:0;padding:0;background:#fff;color:#222;font:14px Arial,sans-serif}.page_wrap{min-height:100vh}.page_header{padding:18px 24px;background:#517da2;color:#fff}.page_header .text{font-size:20px;font-weight:600}.page_body{max-width:980px;margin:0 auto;padding:24px}.message{position:relative;display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #e6e6e6}.body{min-width:0;flex:1}.date{float:right;color:#999;font-size:12px}.from_name{margin-bottom:5px;color:#517da2;font-weight:600}.text{white-space:normal;overflow-wrap:anywhere;line-height:1.45}.media_wrap{margin:6px 0}.media_photo{display:block;max-width:min(100%,640px);max-height:640px;border-radius:4px}.media_wrap video{display:block;max-width:min(100%,640px);max-height:640px}.media_wrap a{color:#517da2;text-decoration:none}.details{color:#999}</style></head><body><div class="page_wrap"><div class="page_header"><div class="content"><div class="text bold">${escapeHTML(options.title)}</div></div></div><div class="page_body chat_page"><div class="history">`);
+    if(htmlWriter) await htmlWriter.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHTML(options.title)}</title><style>html,body{margin:0;padding:0;background:#fff;color:#222;font:14px Arial,sans-serif}.page_wrap{min-height:100vh}.page_header{padding:18px 24px;background:#517da2;color:#fff}.page_header .text{font-size:20px;font-weight:600}.page_body{max-width:980px;margin:0 auto;padding:24px}.message{position:relative;display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #e6e6e6}.body{min-width:0;flex:1}.date{float:right;max-width:100%;margin-left:12px;color:#999;font-size:12px;white-space:nowrap}.from_name{margin-bottom:5px;color:#517da2;font-weight:600}.text{white-space:normal;overflow-wrap:anywhere;line-height:1.45}.media_wrap{margin:6px 0}.media_photo{display:block;max-width:min(100%,640px);max-height:640px;border-radius:4px}.media_wrap video{display:block;max-width:min(100%,640px);max-height:640px}.media_wrap a{color:#517da2;text-decoration:none}.details{color:#999}</style></head><body><div class="page_wrap"><div class="page_header"><div class="content"><div class="text bold">${escapeHTML(options.title)}</div></div></div><div class="page_body chat_page"><div class="history">`);
 
     const processed = new Array<{exported: ExportedMessage, itemFailed: boolean, mediaPath?: string}>(page.length);
     let nextMessageIndex = 0;
