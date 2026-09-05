@@ -735,16 +735,16 @@ export default class ChatContextMenu {
         (!this.message.pFlags.is_outgoing || this.message.fromId === SERVICE_PEER_ID) &&
         this.message._ !== 'messageService'
     }, {
+      icon: 'link',
+      text: 'Message.Context.SaveLinkToSavedMessages',
+      onClick: this.onSaveMessageLinkClick,
+      verify: () => !!this.linkToMessage
+    }, {
       icon: 'forward',
       text: 'Message.Context.SaveToSavedMessages',
       onClick: this.onSaveMessageClick,
       verify: () => !this.noForwards &&
         this.message?._ === 'message'
-    }, {
-      icon: 'link',
-      text: 'Message.Context.SaveLinkToSavedMessages',
-      onClick: this.onSaveMessageLinkClick,
-      verify: () => !!this.linkToMessage
     }, {
       icon: 'forward',
       text: 'Message.Context.Selection.Forward',

@@ -141,14 +141,14 @@ export default class AppMediaViewer extends AppMediaViewerBase<'caption', 'delet
       icon: 'forward',
       text: 'Forward',
       onClick: this.onForwardClick
-    }, this.btnMenuSave = {
-      icon: 'savedmessages',
-      text: 'Message.Context.SaveToSavedMessages',
-      onClick: this.onSaveMessageClick
     }, this.btnMenuSaveLink = {
       icon: 'link',
       text: 'Message.Context.SaveLinkToSavedMessages',
       onClick: this.onSaveMessageLinkClick
+    }, this.btnMenuSave = {
+      icon: 'savedmessages',
+      text: 'Message.Context.SaveToSavedMessages',
+      onClick: this.onSaveMessageClick
     }, this.btnMenuDownload = {
       icon: 'download',
       text: 'MediaViewer.Context.Download',
