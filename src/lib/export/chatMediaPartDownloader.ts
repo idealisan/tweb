@@ -26,7 +26,7 @@ export async function downloadMediaParts(
   onPart: PartCallback,
   onProgress?: ProgressCallback,
   startOffset = 0
-) {
+): Promise<number> {
   const source = media._ === 'document' ?
     await rootScope.managers.appDocsManager.getDoc(media.id) || media :
     await rootScope.managers.appPhotosManager.getPhoto(media.id) || media;
@@ -58,9 +58,13 @@ export async function downloadMediaParts(
       }
     }
     const bytes = 'bytes' in result ? result.bytes as Uint8Array : undefined;
-    if(!bytes?.byteLength) break;
+    if(!bytes?.byteLength) {
+      throw new Error(`MEDIA_DOWNLOAD_EMPTY_PART_${offset}`);
+    }
     await onPart(bytes, offset);
     offset += bytes.byteLength;
     onProgress?.(offset, size || undefined);
   }
+
+  return offset;
 }

@@ -13,6 +13,7 @@ export type ChatExportMediaType = 'photos' | 'videos' | 'voice' | 'video_notes' 
 export type ExportDirectoryHandle = {
   readonly name?: string;
   values?: () => AsyncIterableIterator<{kind: string, name: string}>;
+  removeEntry?: (name: string) => Promise<void>;
   getDirectoryHandle: (name: string, options?: {create?: boolean}) => Promise<ExportDirectoryHandle>;
   getFileHandle: (name: string, options?: {create?: boolean}) => Promise<{
     getFile?: () => Promise<{text: () => Promise<string>, size?: number}>;
@@ -281,17 +282,27 @@ const downloadMediaToFile = async(
     onProgress?.(blob.size);
     return;
   }
-  await downloadMediaParts(media, thumb, async(bytes) => {
-    await writable.write(bytes);
-    writtenBytes += bytes.byteLength;
-    uncommittedBytes += bytes.byteLength;
-    if(uncommittedBytes >= MEDIA_WRITE_COMMIT_BYTES) {
-      await writable.close();
-      writable = await fileHandle.createWritable({keepExistingData: true});
-      if(writable.seek) await writable.seek(writtenBytes);
-      uncommittedBytes = 0;
-    }
-  }, onProgress ? (downloaded) => onProgress(downloaded) : undefined, offset);
+  let downloadedBytes: number;
+  try {
+    downloadedBytes = await downloadMediaParts(media, thumb, async(bytes) => {
+      await writable.write(bytes);
+      writtenBytes += bytes.byteLength;
+      uncommittedBytes += bytes.byteLength;
+      if(uncommittedBytes >= MEDIA_WRITE_COMMIT_BYTES) {
+        await writable.close();
+        writable = await fileHandle.createWritable({keepExistingData: true});
+        if(writable.seek) await writable.seek(writtenBytes);
+        uncommittedBytes = 0;
+      }
+    }, onProgress ? (downloaded) => onProgress(downloaded) : undefined, offset);
+  } catch(error) {
+    await writable.close();
+    throw error;
+  }
+  if(expectedSize !== undefined && downloadedBytes !== expectedSize) {
+    await writable.close();
+    throw new Error(`MEDIA_DOWNLOAD_SIZE_MISMATCH_${downloadedBytes}_${expectedSize}`);
+  }
   await writable.close();
 };
 
@@ -558,6 +569,11 @@ export async function exportChatHistory(options: ChatExportOptions) {
             exported.media = {type: mediaType, fileName: mediaPath};
           } catch(error) {
             if(isCancelled(signal)) throw error;
+            const failedHandle = await mediaDirectory.getFileHandle(fileName, {create: true});
+            const failedFile = await failedHandle.getFile?.();
+            if(failedFile?.size === 0 && mediaDirectory.removeEntry) {
+              await mediaDirectory.removeEntry(fileName);
+            }
             pageHadFailures = true;
             itemFailed = true;
             const current = activeFiles.get(mediaPath) || {path: mediaPath, message_id: message.mid, size: mediaSize, downloaded: 0, status: 'pending' as const};

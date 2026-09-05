@@ -74,7 +74,6 @@ jobs:
               tar -xzf ".release/caddy/${archive}" -C ".release/caddy/${target}"
               caddy_binary=".release/caddy/${target}/caddy"
             fi
-            ".release/caddy/${target}/$(basename "$caddy_binary")" version >/dev/null
             bundle=".release/server/tweb-${RELEASE_TAG}-${target}"
             bash scripts/package_server_bundle.sh "$target" "$caddy_binary" dist "$bundle"
             if [[ "$target" == windows_* ]]; then
