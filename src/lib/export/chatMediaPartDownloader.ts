@@ -4,6 +4,7 @@ import getDocumentDownloadOptions from '../appManagers/utils/docs/getDocumentDow
 import getPhotoDownloadOptions from '../appManagers/utils/photos/getPhotoDownloadOptions';
 
 const PART_SIZE = 512 * 1024;
+const PART_CONCURRENCY = 6;
 
 type DownloadableMedia = Photo.photo | Document.document;
 type PartCallback = (bytes: Uint8Array, offset: number) => Promise<void>;
@@ -37,19 +38,19 @@ export async function downloadMediaParts(
   let offset = startOffset;
   onProgress?.(offset, size || undefined);
 
-  while(!size || offset < size) {
-    let result;
+  const requestPart = async(partOffset: number): Promise<Uint8Array | undefined> => {
     while(true) {
       try {
-        result = await rootScope.managers.apiManager.invokeApi('upload.getFile', {
+        const result = await rootScope.managers.apiManager.invokeApi('upload.getFile', {
           location: options.location as InputFileLocation,
-          offset,
+          offset: partOffset,
           limit: PART_SIZE
         }, {
           dcId: options.dcId,
           fileDownload: true
         });
-        break;
+        const bytes = 'bytes' in result ? result.bytes as Uint8Array : undefined;
+        return bytes?.byteLength ? bytes : undefined;
       } catch(error) {
         const seconds = getFloodWaitSeconds(error);
         if(seconds === undefined) throw error;
@@ -57,13 +58,42 @@ export async function downloadMediaParts(
         await waitForFloodWait(seconds);
       }
     }
-    const bytes = 'bytes' in result ? result.bytes as Uint8Array : undefined;
-    if(!bytes?.byteLength) {
-      throw new Error(`MEDIA_DOWNLOAD_EMPTY_PART_${offset}`);
+  };
+
+  if(size) {
+    const offsets: number[] = [];
+    for(let partOffset = startOffset; partOffset < size; partOffset += PART_SIZE) {
+      offsets.push(partOffset);
     }
-    await onPart(bytes, offset);
-    offset += bytes.byteLength;
-    onProgress?.(offset, size || undefined);
+
+    const parts = new Map<number, Uint8Array>();
+    let nextPart = 0;
+    const workers = Array.from({length: Math.min(PART_CONCURRENCY, offsets.length)}, async() => {
+      while(nextPart < offsets.length) {
+        const index = nextPart++;
+        const partOffset = offsets[index];
+        const bytes = await requestPart(partOffset);
+        if(!bytes) throw new Error(`MEDIA_DOWNLOAD_EMPTY_PART_${partOffset}`);
+        parts.set(partOffset, bytes);
+      }
+    });
+    await Promise.all(workers);
+
+    for(const partOffset of offsets) {
+      const bytes = parts.get(partOffset);
+      if(!bytes) throw new Error(`MEDIA_DOWNLOAD_MISSING_PART_${partOffset}`);
+      await onPart(bytes, partOffset);
+      offset = partOffset + bytes.byteLength;
+      onProgress?.(offset, size);
+    }
+  } else {
+    while(true) {
+      const bytes = await requestPart(offset);
+      if(!bytes) break;
+      await onPart(bytes, offset);
+      offset += bytes.byteLength;
+      onProgress?.(offset, undefined);
+    }
   }
 
   return offset;

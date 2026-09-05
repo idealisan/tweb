@@ -5,7 +5,7 @@ import {downloadMediaParts} from './chatMediaPartDownloader';
 import rootScope from '../rootScope';
 import appDownloadManager from '../appManagers/appDownloadManager';
 import getMediaFromMessage from '../appManagers/utils/messages/getMediaFromMessage';
-import {Document, DocumentAttribute, Message, Photo} from '../../layer';
+import {Document, DocumentAttribute, Message, Photo, PhotoSize} from '../../layer';
 
 export type ChatExportFormat = 'html' | 'json';
 export type ChatExportMediaType = 'photos' | 'videos' | 'voice' | 'video_notes' | 'stickers' | 'animated_gif' | 'files';
@@ -192,16 +192,28 @@ const getMediaExtension = (media: Photo.photo | Document.document) => {
   return mimeExtension === 'jpeg' ? 'jpg' : mimeExtension || 'bin';
 };
 
+const getPhotoSizeBytes = (size: PhotoSize) => {
+  if(size._ === 'photoSize' && typeof size.size === 'number') return size.size;
+  if(size._ === 'photoSizeProgressive' && size.sizes.length) return size.sizes[size.sizes.length - 1];
+  return 0;
+};
+
+const getLargestPhotoSize = (media: Photo.photo) => {
+  const sizes = media.sizes.filter((size) => size._ === 'photoSize' || size._ === 'photoSizeProgressive');
+  const regularSizes = sizes.filter((size) => size._ === 'photoSize');
+  return (regularSizes.length ? regularSizes : sizes)
+  .reduce<PhotoSize | undefined>((largest, size) => {
+    return !largest || getPhotoSizeBytes(size) > getPhotoSizeBytes(largest) ? size : largest;
+  }, undefined);
+};
+
 const getMediaSize = (media: Photo.photo | Document.document) => {
   if(media._ === 'document') {
     return typeof media.size === 'number' ? media.size : undefined;
   }
 
-  return media.sizes.reduce<number | undefined>((largest, size) => {
-    if(size._ === 'photoSize' && typeof size.size === 'number') return Math.max(largest || 0, size.size);
-    if(size._ === 'photoSizeProgressive' && size.sizes.length) return Math.max(largest || 0, size.sizes[size.sizes.length - 1]);
-    return largest;
-  }, undefined);
+  const largest = getLargestPhotoSize(media);
+  return largest ? getPhotoSizeBytes(largest) : undefined;
 };
 
 const formatMediaSize = (bytes?: number) => {
@@ -275,24 +287,35 @@ const downloadMediaToFile = async(
   let writtenBytes = offset;
   let uncommittedBytes = 0;
   const thumb = media._ === 'photo' ?
-    media.sizes.filter((size) => size._ === 'photoSize' || size._ === 'photoSizeProgressive').at(-1) :
+    getLargestPhotoSize(media) :
     undefined;
 
   onProgress?.(offset);
   if(mediaSizeIsSmall(expectedSize, existingSize)) {
     await writable.close();
-    const url = await appDownloadManager.downloadMediaURL({media, thumb});
-    const response = await fetch(url);
-    if(!response.ok) throw new Error(`MEDIA_CACHE_FETCH_FAILED_${response.status}`);
-    const blob = await response.blob();
-    if(expectedSize !== undefined && blob.size !== expectedSize) {
-      throw new Error(`MEDIA_CACHE_SIZE_MISMATCH_${blob.size}_${expectedSize}`);
+    try {
+      const url = await appDownloadManager.downloadMediaURL({media, thumb});
+      const response = await fetch(url);
+      if(!response.ok) throw new Error(`MEDIA_CACHE_FETCH_FAILED_${response.status}`);
+      const blob = await response.blob();
+      if(expectedSize === undefined || blob.size === expectedSize) {
+        const smallWritable = await fileHandle.createWritable();
+        await smallWritable.write(blob);
+        await smallWritable.close();
+        onProgress?.(blob.size);
+        return;
+      }
+      console.warn(`[ChatExport] cached media size mismatch; downloading original`, {
+        actualSize: blob.size,
+        expectedSize
+      });
+    } catch(error) {
+      console.warn('[ChatExport] cached media unavailable; downloading original', error);
     }
-    const smallWritable = await fileHandle.createWritable();
-    await smallWritable.write(blob);
-    await smallWritable.close();
-    onProgress?.(blob.size);
-    return;
+    writable = await fileHandle.createWritable();
+    if(writable.truncate) await writable.truncate(0);
+    writtenBytes = 0;
+    uncommittedBytes = 0;
   }
   let downloadedBytes: number;
   try {

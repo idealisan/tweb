@@ -62,9 +62,11 @@ export default class PopupChatExportSettings extends PopupElement {
     });
     MEDIA_OPTIONS.forEach((title, idx) => {
       const field = new CheckboxField();
+      field.checked = true;
       this.mediaFields.push({type: mediaTypes[idx], field});
       this.appendCheckbox(title, field);
     });
+    this.selectAllMediaField.checked = true;
 
     const sizeLabel = document.createElement('label');
     sizeLabel.className = 'chat-export-size';
