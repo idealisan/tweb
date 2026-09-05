@@ -41,6 +41,8 @@ const ADDITIONAL_ALIASES = {
   'solid-transition-group': resolve(rootDir, 'src/vendor/solid-transition-group')
 };
 
+const ENABLE_CHECKER = process.env.CHECKER === 'true';
+
 console.log('has built solid', HAS_SOLID);
 
 export default defineConfig({
@@ -49,7 +51,7 @@ export default defineConfig({
     //   /* features options - all disabled by default */
     //   autoname: true // e.g. enable autoname
     // }),
-    process.env.VITEST ? undefined : checker({
+    !ENABLE_CHECKER ? undefined : checker({
       typescript: true,
       eslint: {
         // for example, lint .ts and .tsx
@@ -59,10 +61,10 @@ export default defineConfig({
     solidPlugin(),
     handlebarsPlugin as any,
     USE_SSL ? (basicSsl as any)(SSL_CONFIG) : undefined,
-    visualizer({
+    process.env.ANALYZE ? visualizer({
       gzipSize: true,
       template: 'treemap'
-    })
+    }) : undefined
   ].filter(Boolean),
   test: {
     // include: ['**/*.{test,spec}.?(c|m)[jt]s?(x)'],
@@ -94,6 +96,7 @@ export default defineConfig({
   server: serverOptions,
   base: '',
   build: {
+    modulePreload: false,
     target: 'es2020',
     sourcemap: true,
     assetsDir: '',
@@ -102,7 +105,8 @@ export default defineConfig({
     minify: NO_MINIFY ? false : undefined,
     rollupOptions: {
       output: {
-        sourcemapIgnoreList: serverOptions.sourcemapIgnoreList
+        sourcemapIgnoreList: serverOptions.sourcemapIgnoreList,
+        inlineDynamicImports: true
       }
       // input: {
       //   main: './index.html',
