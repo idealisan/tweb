@@ -369,6 +369,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
   let offsetId = canResume ? checkpoint.next_offset_id : 0;
   let total: number | undefined;
   const visitedOffsets = new Set<number>();
+  const exportedMessageIds = new Set<number>();
   let lastMedia = canResume ? checkpoint.last_media : undefined;
   const completedMedia = new Map((canResume ? checkpoint.media_files || [] : []).map((file) => [file.path, file.size]));
   const failedMedia = new Map((canResume ? checkpoint.failed_media || [] : []).map((file) => [file.path, file]));
@@ -376,7 +377,12 @@ export async function exportChatHistory(options: ChatExportOptions) {
   let lastItem = canResume ? checkpoint.last_item : undefined;
   const resumeItem = canResume ? checkpoint.last_item : undefined;
 
-  const writeCheckpoint = async(status: ExportCheckpoint['status'], nextOffsetId: number | null, media = lastMedia) => {
+  const writeCheckpoint = async(
+    status: ExportCheckpoint['status'],
+    nextOffsetId: number | null,
+    media = lastMedia,
+    messageCount = exportedCount
+  ) => {
     await writeFile(exportDirectory, 'export_metadata.json', JSON.stringify({
       schema_version: 2,
       export_key: exportKey,
@@ -387,7 +393,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
       formats,
       media_types: options.mediaTypes,
       max_media_bytes: options.maxMediaBytes,
-      message_count: exportedCount,
+      message_count: messageCount,
       total_count: total,
       next_offset_id: nextOffsetId,
       parts,
@@ -425,7 +431,11 @@ export async function exportChatHistory(options: ChatExportOptions) {
         console.warn('[ChatExport] skipping unreadable message', {peerId, mid, error});
         return undefined;
       }
-    }))).filter(Boolean) as MyMessage[];
+    }))).filter((message): message is MyMessage => {
+      if(!message || exportedMessageIds.has(message.mid)) return false;
+      exportedMessageIds.add(message.mid);
+      return true;
+    });
     const partName = `messages-${('0000' + ++partNumber).slice(-4)}`;
     const pageStartExportedCount = exportedCount;
     let pageHadFailures = false;
@@ -488,7 +498,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
               lastMedia = {path: mediaPath, message_id: message.mid, size: mediaSize};
               lastFile = {...lastMedia, status: 'pending'};
               lastItem = {...lastItem, path: mediaPath};
-              await writeCheckpoint('exporting', offsetId, lastMedia);
+              await writeCheckpoint('exporting', offsetId, lastMedia, pageStartExportedCount);
               await downloadMediaToFile(
                 media as Photo.photo | Document.document,
                 mediaDirectory,
@@ -507,7 +517,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
               failedMedia.delete(mediaPath);
               lastFile = {...lastMedia, status: 'downloaded'};
               lastItem = {...lastItem, status: 'completed'};
-              await writeCheckpoint('exporting', offsetId, lastMedia);
+              await writeCheckpoint('exporting', offsetId, lastMedia, pageStartExportedCount);
             } else {
               lastFile = {path: mediaPath, message_id: message.mid, size: mediaSize, status: 'downloaded'};
               lastItem = {...lastItem, path: mediaPath, status: 'completed'};
