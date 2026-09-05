@@ -256,7 +256,7 @@ const makeHTMLMessage = (message: ExportedMessage) => {
     if(message.media.type === 'photos') {
       media = `<div class="media_wrap clearfix"><a href="${fileName}"><img src="${fileName}" class="media_photo"></a></div>`;
     } else if(['videos', 'video_notes', 'animated_gif'].includes(message.media.type)) {
-      media = `<div class="media_wrap clearfix"><video controls preload="metadata" src="${fileName}"></video></div>`;
+      media = `<div class="media_wrap clearfix"><video controls preload="metadata" playsinline src="${fileName}"></video></div>`;
     } else {
       media = `<div class="media_wrap clearfix"><a href="${fileName}">${fileName.split('/').pop()}</a></div>`;
     }

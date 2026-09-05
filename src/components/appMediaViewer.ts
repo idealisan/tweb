@@ -33,6 +33,9 @@ import PopupElement from './popups';
 import {ChatType} from './chat/chat';
 import getFwdFromName from '../lib/appManagers/utils/messages/getFwdFromName';
 import TranslatableMessage from './translatableMessage';
+import getMessageLink from '../lib/appManagers/utils/messages/getMessageLink';
+import {forwardMessageToSaved, saveMessageLinkToSaved} from '../lib/appManagers/utils/messages/saveMessageToSaved';
+import {toastNew} from './toast';
 
 type AppMediaViewerTargetType = {
   element: HTMLElement,
@@ -66,6 +69,9 @@ export default class AppMediaViewer extends AppMediaViewerBase<'caption', 'delet
   protected btnMenuForward: ButtonMenuItemOptionsVerifiable;
   protected btnMenuDownload: ButtonMenuItemOptionsVerifiable;
   protected btnMenuDelete: ButtonMenuItemOptionsVerifiable;
+  protected btnMenuSave: ButtonMenuItemOptionsVerifiable;
+  protected btnMenuSaveLink: ButtonMenuItemOptionsVerifiable;
+  private messageLink?: string;
 
   get searchContext() {
     return this.listLoader.searchContext;
@@ -135,6 +141,14 @@ export default class AppMediaViewer extends AppMediaViewerBase<'caption', 'delet
       icon: 'forward',
       text: 'Forward',
       onClick: this.onForwardClick
+    }, this.btnMenuSave = {
+      icon: 'savedmessages',
+      text: 'Message.Context.SaveToSavedMessages',
+      onClick: this.onSaveMessageClick
+    }, this.btnMenuSaveLink = {
+      icon: 'link',
+      text: 'Message.Context.SaveLinkToSavedMessages',
+      onClick: this.onSaveMessageLinkClick
     }, this.btnMenuDownload = {
       icon: 'download',
       text: 'MediaViewer.Context.Download',
@@ -230,6 +244,29 @@ export default class AppMediaViewer extends AppMediaViewerBase<'caption', 'delet
     }
   };
 
+  onSaveMessageClick = async() => {
+    const target = this.target;
+    if(!target.mid) return;
+    try {
+      await forwardMessageToSaved(target.peerId, [target.mid]);
+      toastNew({langPackKey: 'FwdMessageToSavedMessages'});
+    } catch(error) {
+      console.error('[AppMediaViewer] failed to save message', error);
+      toastNew({langPackKey: 'Error.AnError'});
+    }
+  };
+
+  onSaveMessageLinkClick = async() => {
+    if(!this.messageLink) return;
+    try {
+      await saveMessageLinkToSaved(this.messageLink);
+      toastNew({langPackKey: 'MessageLinkSavedToSavedMessages'});
+    } catch(error) {
+      console.error('[AppMediaViewer] failed to save message link', error);
+      toastNew({langPackKey: 'Error.AnError'});
+    }
+  };
+
   onAuthorClick = async(e: MouseEvent) => {
     const {mid, peerId} = this.target;
     if(mid && mid !== Number.MAX_SAFE_INTEGER) {
@@ -317,9 +354,13 @@ export default class AppMediaViewer extends AppMediaViewerBase<'caption', 'delet
     const noForwards = await this.managers.appPeersManager.noForwards(message.peerId);
     const isServiceMessage = message._ === 'messageService';
     const cantForwardMessage = isServiceMessage || !(await this.managers.appMessagesManager.canForward(message));
+    const messageLink = await getMessageLink(this.managers, message.peerId, mid, this.searchContext.threadId);
+    this.messageLink = messageLink?.url;
     const cantDownloadMessage = false ;
     const a: [(HTMLElement | ButtonMenuItemOptionsVerifiable)[], boolean][] = [
       [[this.buttons.forward, this.btnMenuForward], cantForwardMessage],
+      [[this.btnMenuSave], cantForwardMessage],
+      [[this.btnMenuSaveLink], !messageLink],
       [[this.buttons.download, this.btnMenuDownload], cantDownloadMessage],
       [[this.buttons.delete, this.btnMenuDelete], !(await this.managers.appMessagesManager.canDeleteMessage(message))]
     ];

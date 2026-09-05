@@ -31,7 +31,6 @@ import {IS_APPLE, IS_MOBILE} from '../../environment/userAgent';
 import PopupReactedList from '../popups/reactedList';
 import {ChatReactionsMenu, REACTION_CONTAINER_SIZE} from './reactionsMenu';
 import getPeerId from '../../lib/appManagers/utils/peers/getPeerId';
-import getServerMessageId from '../../lib/appManagers/utils/messageId/getServerMessageId';
 import {AppManagers} from '../../lib/appManagers/managers';
 import positionMenu, {MenuPositionPadding} from '../../helpers/positionMenu';
 import contextMenuController from '../../helpers/contextMenuController';
@@ -71,6 +70,8 @@ import detectLanguageForTranslation from '../../helpers/detectLanguageForTransla
 import usePeerTranslation from '../../hooks/usePeerTranslation';
 import wrapRichText from '../../lib/richTextProcessor/wrapRichText';
 import documentFragmentToHTML from '../../helpers/dom/documentFragmentToHTML';
+import getMessageLink from '../../lib/appManagers/utils/messages/getMessageLink';
+import {forwardMessageToSaved, saveMessageLinkToSaved} from '../../lib/appManagers/utils/messages/saveMessageToSaved';
 
 type ChatContextMenuButton = ButtonMenuItemOptions & {
   verify: () => boolean | Promise<boolean>,
@@ -735,6 +736,17 @@ export default class ChatContextMenu {
         this.message._ !== 'messageService'
     }, {
       icon: 'forward',
+      text: 'Message.Context.SaveToSavedMessages',
+      onClick: this.onSaveMessageClick,
+      verify: () => !this.noForwards &&
+        this.message?._ === 'message'
+    }, {
+      icon: 'link',
+      text: 'Message.Context.SaveLinkToSavedMessages',
+      onClick: this.onSaveMessageLinkClick,
+      verify: () => !!this.linkToMessage
+    }, {
+      icon: 'forward',
       text: 'Message.Context.Selection.Forward',
       onClick: this.onForwardClick,
       verify: () => this.chat.selection.selectionForwardBtn &&
@@ -1198,33 +1210,13 @@ export default class ChatContextMenu {
   }
 
   private async getUrlToMessage() {
-    if(!this.message || this.peerId.isUser()) {
-      return;
-    }
-
-    let threadMessage: Message.message;
-    const {peerId, mid} = this;
-    const threadId = this.chat.threadId;
-    if(this.chat.type === ChatType.Discussion) {
-      threadMessage = (await this.managers.appMessagesManager.getMessageByPeer(peerId, threadId)) as Message.message;
-    }
-
-    const username = await this.managers.appPeersManager.getPeerUsername(threadMessage ? threadMessage.fromId : peerId);
-    const msgId = getServerMessageId(mid);
-    let url = 'https://t.me/';
-    if(username) {
-      url += username;
-      if(threadMessage) url += `/${getServerMessageId(threadMessage.fwd_from.channel_post)}?comment=${msgId}`;
-      else if(threadId) url += `/${getServerMessageId(threadId)}/${msgId}`;
-      else url += '/' + msgId;
-    } else {
-      url += 'c/' + peerId.toChatId();
-      if(threadMessage) url += `/${msgId}?thread=${getServerMessageId(threadMessage.mid)}`;
-      else if(threadId) url += `/${getServerMessageId(threadId)}/${msgId}`;
-      else url += '/' + msgId;
-    }
-
-    return {url, isPrivate: !username};
+    return this.message && getMessageLink(
+      this.managers,
+      this.peerId,
+      this.mid,
+      this.chat.threadId,
+      this.chat.type === ChatType.Discussion
+    );
   }
 
   private async getSelectedMessagesText() {
@@ -1338,6 +1330,28 @@ export default class ChatContextMenu {
       PopupForward.create({
         [peerId]: mids
       });
+    }
+  };
+
+  private onSaveMessageClick = async() => {
+    const mids = this.isTargetAGroupedItem ? [this.mid] : await this.chat.getMidsByMid(this.mid);
+    try {
+      await forwardMessageToSaved(this.peerId, mids);
+      toastNew({langPackKey: mids.length > 1 ? 'FwdMessagesToSavedMessages' : 'FwdMessageToSavedMessages'});
+    } catch(error) {
+      console.error('[ChatContextMenu] failed to save message', error);
+      toastNew({langPackKey: 'Error.AnError'});
+    }
+  };
+
+  private onSaveMessageLinkClick = async() => {
+    if(!this.linkToMessage) return;
+    try {
+      await saveMessageLinkToSaved(this.linkToMessage.url);
+      toastNew({langPackKey: 'MessageLinkSavedToSavedMessages'});
+    } catch(error) {
+      console.error('[ChatContextMenu] failed to save message link', error);
+      toastNew({langPackKey: 'Error.AnError'});
     }
   };
 
