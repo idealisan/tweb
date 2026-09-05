@@ -132,10 +132,13 @@ export async function downloadMediaParts(
     }
 
     const parts = new Map<number, Uint8Array>();
+    let downloadedPartsBytes = 0;
     await Promise.all(offsets.map(async(partOffset) => {
       const bytes = await requestPart(partOffset);
       if(!bytes) throw new Error(`MEDIA_DOWNLOAD_EMPTY_PART_${partOffset}`);
       parts.set(partOffset, bytes);
+      downloadedPartsBytes += bytes.byteLength;
+      onProgress?.(startOffset + downloadedPartsBytes, size);
     }));
 
     for(const partOffset of offsets) {
@@ -143,7 +146,6 @@ export async function downloadMediaParts(
       if(!bytes) throw new Error(`MEDIA_DOWNLOAD_MISSING_PART_${partOffset}`);
       await onPart(bytes, partOffset);
       offset = partOffset + bytes.byteLength;
-      onProgress?.(offset, size);
     }
   } else {
     while(true) {
