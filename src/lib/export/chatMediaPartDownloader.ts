@@ -6,6 +6,7 @@ import getPhotoDownloadOptions from '../appManagers/utils/photos/getPhotoDownloa
 const MIN_PART_SIZE = 64 * 1024;
 const AVG_PART_SIZE = 512 * 1024;
 const MAX_PART_SIZE = 1024 * 1024;
+const FILE_PART_CONCURRENCY = 8;
 const DEFAULT_MAX_DOWNLOAD_PARTS = 8000;
 const REGULAR_DOWNLOAD_DELTA = (9 * AVG_PART_SIZE) / MIN_PART_SIZE;
 const PREMIUM_DOWNLOAD_DELTA = (56 * AVG_PART_SIZE) / MIN_PART_SIZE;
@@ -151,11 +152,16 @@ export async function downloadMediaParts(
     };
 
     try {
-      await Promise.all(offsets.map(async(partOffset) => {
-        const bytes = await requestPart(partOffset);
-        if(!bytes) throw new Error(`MEDIA_DOWNLOAD_EMPTY_PART_${partOffset}`);
-        parts.set(partOffset, bytes);
-        await writeReadyParts();
+      const workerCount = Math.min(FILE_PART_CONCURRENCY, offsets.length);
+      let nextPartIndex = 0;
+      await Promise.all(Array.from({length: workerCount}, async() => {
+        while(nextPartIndex < offsets.length) {
+          const partOffset = offsets[nextPartIndex++];
+          const bytes = await requestPart(partOffset);
+          if(!bytes) throw new Error(`MEDIA_DOWNLOAD_EMPTY_PART_${partOffset}`);
+          parts.set(partOffset, bytes);
+          await writeReadyParts();
+        }
       }));
     } catch(error) {
       canWrite = false;

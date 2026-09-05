@@ -344,6 +344,10 @@ const downloadMediaToFile = async(
     throw new Error(`MEDIA_DOWNLOAD_SIZE_MISMATCH_${downloadedBytes}_${expectedSize}`);
   }
   await writable.close();
+  const completedFile = await fileHandle.getFile?.();
+  if(expectedSize !== undefined && completedFile?.size !== expectedSize) {
+    throw new Error(`MEDIA_WRITE_SIZE_MISMATCH_${completedFile?.size || 0}_${expectedSize}`);
+  }
 };
 
 const mediaSizeIsSmall = (size: number | undefined, existingSize: number) =>
