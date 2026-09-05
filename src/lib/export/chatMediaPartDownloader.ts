@@ -132,21 +132,39 @@ export async function downloadMediaParts(
     }
 
     const parts = new Map<number, Uint8Array>();
-    let downloadedPartsBytes = 0;
-    await Promise.all(offsets.map(async(partOffset) => {
-      const bytes = await requestPart(partOffset);
-      if(!bytes) throw new Error(`MEDIA_DOWNLOAD_EMPTY_PART_${partOffset}`);
-      parts.set(partOffset, bytes);
-      downloadedPartsBytes += bytes.byteLength;
-      onProgress?.(startOffset + downloadedPartsBytes, size);
-    }));
+    let nextWriteOffset = startOffset;
+    let writePromise = Promise.resolve();
+    let canWrite = true;
+    const writeReadyParts = () => {
+      writePromise = writePromise.then(async() => {
+        if(!canWrite) return;
+        while(parts.has(nextWriteOffset)) {
+          const bytes = parts.get(nextWriteOffset);
+          parts.delete(nextWriteOffset);
+          if(!bytes) break;
+          await onPart(bytes, nextWriteOffset);
+          nextWriteOffset += bytes.byteLength;
+          onProgress?.(nextWriteOffset, size);
+        }
+      });
+      return writePromise;
+    };
 
-    for(const partOffset of offsets) {
-      const bytes = parts.get(partOffset);
-      if(!bytes) throw new Error(`MEDIA_DOWNLOAD_MISSING_PART_${partOffset}`);
-      await onPart(bytes, partOffset);
-      offset = partOffset + bytes.byteLength;
+    try {
+      await Promise.all(offsets.map(async(partOffset) => {
+        const bytes = await requestPart(partOffset);
+        if(!bytes) throw new Error(`MEDIA_DOWNLOAD_EMPTY_PART_${partOffset}`);
+        parts.set(partOffset, bytes);
+        await writeReadyParts();
+      }));
+    } catch(error) {
+      canWrite = false;
+      await writePromise.catch(() => {});
+      throw error;
     }
+    await writePromise;
+    if(nextWriteOffset !== size) throw new Error(`MEDIA_DOWNLOAD_MISSING_PART_${nextWriteOffset}`);
+    offset = nextWriteOffset;
   } else {
     while(true) {
       const bytes = await requestPart(offset);
