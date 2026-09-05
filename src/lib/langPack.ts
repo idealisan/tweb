@@ -122,8 +122,18 @@ namespace I18n {
         setLangCode(langPack.lang_code);
       }
 
-      applyLangPack(langPack);
-      return langPack;
+      return Promise.all([
+        import('../lang'),
+        import('../langSign')
+      ]).then(([localLang, localLangSign]) => {
+        const cachedKeys = new Set(langPack.strings.map((string) => string.key));
+        const localStrings: LangPackString[] = [];
+        formatLocalStrings(localLang.default, localStrings);
+        formatLocalStrings(localLangSign.default, localStrings);
+        langPack.strings = localStrings.filter((string) => !cachedKeys.has(string.key)).concat(langPack.strings);
+        applyLangPack(langPack);
+        return langPack;
+      });
     }).finally(() => {
       cacheLangPackPromise = undefined;
     });
