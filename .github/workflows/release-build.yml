@@ -37,8 +37,57 @@ jobs:
       - name: Package build output
         run: tar -czf "tweb-${{ github.event.release.tag_name }}.tar.gz" dist
 
+      - name: Download Caddy and package server bundles
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          caddy_tag="$(curl --fail --silent --show-error \
+            https://api.github.com/repos/caddyserver/caddy/releases/latest | jq -r .tag_name)"
+          caddy_version="${caddy_tag#v}"
+          mkdir -p .release/caddy .release/server
+
+          targets=(
+            linux_amd64
+            linux_arm64
+            mac_amd64
+            mac_arm64
+            windows_amd64
+            windows_arm64
+          )
+          for target in "${targets[@]}"; do
+            archive="caddy_${caddy_version}_${target}"
+            if [[ "$target" == windows_* ]]; then
+              archive="${archive}.zip"
+              curl --fail --location --silent --show-error \
+                -o ".release/caddy/${archive}" \
+                "https://github.com/caddyserver/caddy/releases/download/${caddy_tag}/${archive}"
+              mkdir -p ".release/caddy/${target}"
+              unzip -q ".release/caddy/${archive}" -d ".release/caddy/${target}"
+              caddy_binary=".release/caddy/${target}/caddy.exe"
+            else
+              archive="${archive}.tar.gz"
+              curl --fail --location --silent --show-error \
+                -o ".release/caddy/${archive}" \
+                "https://github.com/caddyserver/caddy/releases/download/${caddy_tag}/${archive}"
+              mkdir -p ".release/caddy/${target}"
+              tar -xzf ".release/caddy/${archive}" -C ".release/caddy/${target}"
+              caddy_binary=".release/caddy/${target}/caddy"
+            fi
+            ".release/caddy/${target}/$(basename "$caddy_binary")" version >/dev/null
+            bundle=".release/server/tweb-${RELEASE_TAG}-${target}"
+            bash scripts/package_server_bundle.sh "$target" "$caddy_binary" dist "$bundle"
+            if [[ "$target" == windows_* ]]; then
+              (cd .release/server && zip -qr "${bundle##*/}.zip" "${bundle##*/}")
+            else
+              tar -czf "${bundle}.tar.gz" -C .release/server "${bundle##*/}"
+            fi
+          done
+
       - name: Upload build artifact to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name }}
-          files: tweb-${{ github.event.release.tag_name }}.tar.gz
+          files: |
+            tweb-${{ github.event.release.tag_name }}.tar.gz
+            .release/server/*
