@@ -76,6 +76,12 @@ const getLocalTimestamp = () => {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
 };
 
+const formatExportDate = (timestamp: number) => {
+  const date = new Date(timestamp * 1000);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+};
+
 const PAGE_SIZE = 100;
 const MEDIA_DOWNLOAD_TIMEOUT = 120000;
 const MEDIA_DOWNLOAD_RETRIES = 2;
@@ -389,7 +395,7 @@ export async function exportChatHistory(options: ChatExportOptions) {
   const canResume = checkpoint?.export_key === exportKey && checkpoint.status !== 'completed' && checkpoint.next_offset_id !== null;
   let exportedCount = canResume ? checkpoint.message_count : 0;
   let partNumber = canResume ? checkpoint.parts.reduce((max, part) => {
-    const match = part.path.match(/messages-(\d{4})\./);
+    const match = part.path.match(/-(\d{4})\.(?:json|html)$/);
     return Math.max(max, match ? Number(match[1]) : 0);
   }, 0) : 0;
   const parts: {path: string, format: ChatExportFormat, message_count: number}[] = canResume ? checkpoint.parts.slice() : [];
@@ -460,7 +466,18 @@ export async function exportChatHistory(options: ChatExportOptions) {
         return undefined;
       }
     }))).filter(Boolean) as MyMessage[];
-    const partName = `messages-${('0000' + ++partNumber).slice(-4)}`;
+    const dates = page
+    .filter((message) => {
+      const timestamp = message.date * 1000;
+      return (!options.fromDate || timestamp >= options.fromDate.getTime()) &&
+        (!options.toDate || timestamp <= options.toDate.getTime());
+    })
+    .map((message) => message.date);
+    const dateSource = dates.length ? dates : page.map((message) => message.date);
+    const fallbackDate = Math.floor(Date.now() / 1000);
+    const firstDate = dateSource.length ? Math.min(...dateSource) : fallbackDate;
+    const lastDate = dateSource.length ? Math.max(...dateSource) : fallbackDate;
+    const partName = `messages-${formatExportDate(firstDate)}_to_${formatExportDate(lastDate)}-${('0000' + ++partNumber).slice(-4)}`;
     const pageStartExportedCount = exportedCount;
     let pageHadFailures = false;
     const jsonWriter = formats.includes('json') ? await createWriter(exportDirectory, `${partName}.json`) : undefined;
