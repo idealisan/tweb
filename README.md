@@ -17,7 +17,14 @@ Open http://localhost:8080/ in your browser.
 
 #### Running in production
 
-Run `node build` to build the minimized production version of the app. Copy `public` folder contents to your web server.
+Build the minimized production version of the app and serve the generated `public/` directory with Caddy:
+```lang=bash
+pnpm build
+brew install caddy
+caddy run --config Caddyfile
+```
+
+The included `Caddyfile` serves the app at http://localhost:8080/.
 
 
 ### Dependencies

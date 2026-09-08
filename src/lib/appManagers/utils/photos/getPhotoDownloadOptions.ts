@@ -30,7 +30,13 @@ export default function getPhotoDownloadOptions(photo: MyPhoto | MyDocument, pho
   return {
     dcId: photo.dc_id,
     location,
-    size: isPhoto ? (photoSize as PhotoSize.photoSize).size : undefined,
+    size: isPhoto ?
+      photoSize._ === 'photoSize' ?
+        photoSize.size :
+        photoSize._ === 'photoSizeProgressive' ?
+          photoSize.sizes[photoSize.sizes.length - 1] :
+          undefined :
+      undefined,
     mimeType: 'image/jpeg',
     queueId,
     onlyCache

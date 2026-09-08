@@ -459,6 +459,9 @@ body.is-right-column-shown {
 .chat-export-progress-text {
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-export-progress-bar {
@@ -471,7 +474,7 @@ body.is-right-column-shown {
 
 .chat-export-progress-details {
   position: fixed;
-  z-index: 4;
+  z-index: 20;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
@@ -555,4 +558,8 @@ body.is-right-column-shown {
 
 .chat-export-progress.is-failed .chat-export-progress-bar {
   background: var(--danger-color);
+}
+
+.chat-export-progress.is-cancelled .chat-export-progress-bar {
+  background: var(--secondary-text-color);
 }

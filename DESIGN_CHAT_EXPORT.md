@@ -24,42 +24,28 @@ Chat Expert Settings
 
 ```text
 <target>/
-  <chat-name>/
+  <chat-name>_<timestamp>/
     export_metadata.json
-    messages.html
-    messages.json
-    media/
-      photos/
-      videos/
-      voice/
-      video_notes/
-      stickers/
-      animated_gif/
-      files/
+    messages-<date>_to_<date>-0001.html
+    messages-<date>_to_<date>-0001.json
+    photos/
+    video_files/
+    files/
 ```
 
-当数据非常大时，消息文件按日期或大小切分：
+当前实现按 Telegram 历史页（每页最多 100 条消息）切分消息文件，并以页面内消息日期命名；迁移群组会在新聊天历史结束后继续读取旧聊天：
 
 ```text
 <chat-name>/
   export_metadata.json
-  messages/
-    2020-01.html
-    2020-02.html
-  json/
-    2020-01.json
-    2020-02.json
-  media/
-    photos/
-    videos/
-    voice/
-    video_notes/
-    stickers/
-    animated_gif/
-    files/
+  messages-2020-01-01_00-00-00_to_2020-01-31_23-59-59-0001.html
+  messages-2020-01-01_00-00-00_to_2020-01-31_23-59-59-0001.json
+  photos/
+  video_files/
+  files/
 ```
 
-Telegram Desktop 样本本身没有消息分片，但本项目面向超长聊天时推荐按月份分片，并设置单片最大大小作为保护阈值。兼容样本时，首个分片可以采用相同的 `messages.html`、`css/`、`js/`、`images/`、`photos/`、`video_files/`、`files/` 结构；多个分片则需要额外的索引或月份目录。
+Telegram Desktop 样本本身没有消息分片；本实现保留其 `photos/`、`video_files/`、`files/` 资源目录风格，并通过 `export_metadata.json` 记录所有分片。分片使用 JSON 数组和独立 HTML 文档，页面完成写入并关闭后才加入元数据索引。
 
 样本中的媒体命名约定如下：
 
@@ -76,7 +62,7 @@ Telegram Desktop 样本本身没有消息分片，但本项目面向超长聊天
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 5,
   "chat": {
     "peer_id": 123,
     "title": "Example Chat",
@@ -91,21 +77,25 @@ Telegram Desktop 样本本身没有消息分片，但本项目面向超长聊天
   "formats": ["html", "json"],
   "media_types": ["photos", "videos"],
   "message_count": 100000,
-  "exported_message_count": 100000,
+  "total_count": 100000,
+  "history_peer_id": 123,
+  "next_offset_id": null,
+  "next_scheduled_index": null,
+  "active_files": [],
+  "failed_media": [],
   "parts": [
     {
-      "path": "messages/2020-01.json",
+      "path": "messages-2020-01-01_00-00-00_to_2020-01-31_23-59-59-0001.json",
       "format": "json",
-      "message_count": 5000,
-      "first_date": "2020-01-01",
-      "last_date": "2020-01-31"
+      "message_count": 5000
     }
   ],
   "status": "completed"
 }
 ```
 
-导出中断时将 `status` 写为 `cancelled` 或 `failed`，并保留已经成功写入的分片，便于以后恢复或诊断。
+导出中断时保留 `status: "exporting"`、下一页游标、已提交消息数和媒体状态。checkpoint 使用
+`export_metadata.json.tmp`、`export_metadata.json.bak` 和正式文件三个副本；恢复时会读取所有可解析副本并按更新时间选择最新的一份。`media_files` 和 `failed_media` 只保留当前尚未提交消息分片的媒体状态，已提交分片不需要再次回放这些消息。旧 schema 不会直接恢复，以避免缺少媒体 identity 的旧记录误复用文件。
 
 ## 3. 设置对话框
 
@@ -141,15 +131,13 @@ Telegram Desktop 样本本身没有消息分片，但本项目面向超长聊天
 
 ### 3.2 默认值
 
-建议默认值如下：
+当前默认值如下：
 
-- 日期范围：最早日期到今天；
-- HTML 和 JSON：至少默认勾选 JSON，是否同时勾选 HTML 待产品确认；
-- 媒体类型：全部不勾选，避免用户无意间下载大量媒体；
-- 单个媒体文件大小：建议默认 4 MB 或 10 MB，而不是默认 4 GB；
+- 日期范围：所有日期；
+- HTML 和 JSON：两者都勾选；
+- 媒体类型：全部勾选；
+- 单个媒体文件大小：默认 4 GB；
 - 目标目录：必须由用户主动选择。
-
-如果产品要求“完整复制 Telegram Desktop 导出体验”，也可以默认勾选全部媒体类型，但需要在界面明确提示这可能产生很大的下载量。
 
 ### 3.3 日期范围语义
 
@@ -219,9 +207,9 @@ Chat Topbar Menu
 分页控制器必须：
 
 - 以 API 返回的历史边界作为结束条件；
-- 以消息 ID 去重；
+- 不以本地消息去重掩盖分页错误；每个非空 API 页必须推进游标，游标停滞时让导出失败；
 - 按日期范围尽早停止；
-- 处理频道、论坛 Topic、迁移聊天；
+- 处理频道、论坛 Topic、迁移聊天，并在 checkpoint 中保存当前历史 peer；
 - 不改变当前聊天滚动位置；
 - 不把全部消息复制到一个数组中。
 
@@ -363,7 +351,7 @@ HTML 文本必须安全转义。消息内容、文件名、发送者名称和 UR
 - 当前阶段：读取历史、下载媒体、写入文件、已完成、已取消或失败；
 - 取消按钮。
 
-总数来自 Telegram 分页结果的 `count`。如果 API 没有可靠总数，应显示：
+没有日期筛选时，总数来自 Telegram 分页结果的 `count`。启用日期筛选时，历史 API 的 `count` 代表整个聊天而不是筛选后的数量，因此界面显示未知总数，避免显示错误比例：
 
 ```text
 1,234 / --
@@ -375,13 +363,13 @@ HTML 文本必须安全转义。消息内容、文件名、发送者名称和 UR
 
 ## 10. 取消、失败和恢复
 
-导出控制器需要使用独立的取消信号：
+导出控制器使用独立的取消信号：
 
 - 取消历史 API 请求；
 - 取消媒体下载；
 - 关闭当前文件写入流；
-- 将元数据状态写为 `cancelled`；
-- 保留已经写入的分片。
+- 保留已经写入的分片；已知大小且 identity 匹配的媒体可以继续下载前缀，未知大小媒体会从头校验下载；
+- 取消、失败或页面写入异常不会把未完整关闭的消息分片加入 `parts`。
 
 错误处理必须区分：
 
@@ -392,7 +380,7 @@ HTML 文本必须安全转义。消息内容、文件名、发送者名称和 UR
 - 本地磁盘写入失败；
 - 用户主动取消。
 
-第一版可以只保证安全取消和保留已完成文件；后续可基于 `export_metadata.json` 实现断点续导。恢复时需要记录最后成功写入的消息 ID、分片路径和媒体状态。
+当前实现基于 `export_metadata.json` 断点续导：历史游标、已提交消息数、分片、媒体 identity、活动文件和失败媒体都会保存。媒体下载按 64 KB 至 1 MB 分片并发，按顺序写入，已知大小会校验每个分片和最终磁盘大小；未知大小以空分片结束并校验实际文件大小。
 
 ## 11. 建议的代码拆分
 
@@ -417,16 +405,10 @@ src/lib/export/chatHistoryExporter.ts
 实现导出任务状态、取消、分页协调、日期过滤和进度事件。
 
 ```text
-src/lib/export/chatHistoryWriter.ts
+src/lib/export/chatMediaPartDownloader.ts
 ```
 
-实现 HTML/JSON 分片写入、大小边界和文件关闭。
-
-```text
-src/lib/export/chatHistoryMedia.ts
-```
-
-实现媒体分类、大小过滤、下载、文件命名和失败记录。
+实现媒体分片并发、顺序写入、取消、超时、文件引用刷新和 CDN 响应校验。
 
 ```text
 src/lib/appManagers/appMessagesManager.ts

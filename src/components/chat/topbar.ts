@@ -118,6 +118,7 @@ export default class ChatTopbar {
   private exportAbortController: AbortController;
   private exportTitle = '';
   private exportActive = false;
+  private exportGeneration = 0;
 
   private titleMiddlewareHelper: MiddlewareHelper;
   private status: ReturnType<ChatTopbar['createStatus']>;
@@ -618,6 +619,8 @@ export default class ChatTopbar {
   }
 
   public startExportProgress(title: string, abortController: AbortController) {
+    this.exportAbortController?.abort();
+    const generation = ++this.exportGeneration;
     this.exportProgress?.remove();
     this.exportDetailsPanel?.remove();
     this.exportDetailRows.clear();
@@ -647,6 +650,7 @@ export default class ChatTopbar {
     this.exportDetailsPanel = document.createElement('div');
     this.exportDetailsPanel.className = 'chat-export-progress-details hide';
     this.exportDetailsPanel.setAttribute('role', 'dialog');
+    this.exportDetailsPanel.setAttribute('aria-modal', 'true');
     this.exportDetailsPanel.setAttribute('aria-label', I18n.format('ChatExport.Details', true));
     this.exportDetailsPanel.addEventListener('click', (event) => event.stopPropagation());
     const detailsTitle = document.createElement('div');
@@ -679,9 +683,11 @@ export default class ChatTopbar {
     this.exportDetailsPanel.append(detailsTitle, this.exportDetailsList, this.exportDetailsEmpty, detailsButtons);
     document.body.append(this.exportDetailsPanel);
     this.container.before(this.exportProgress);
+    return generation;
   }
 
-  public updateExportProgress(progress: ChatExportProgress) {
+  public updateExportProgress(progress: ChatExportProgress, generation = this.exportGeneration) {
+    if(generation !== this.exportGeneration) return;
     if(!this.exportProgress) return;
     const total = progress.total || 0;
     this.exportProgressText.textContent = I18n.format('ChatExport.Progress', true, [
@@ -694,7 +700,8 @@ export default class ChatTopbar {
     this.updateExportDetails(progress.activeFiles || []);
   }
 
-  public finishExportProgress(failed: boolean) {
+  public finishExportProgress(status: 'completed' | 'failed' | 'cancelled', generation = this.exportGeneration) {
+    if(generation !== this.exportGeneration) return;
     this.exportActive = false;
     this.exportCancelButton?.classList.add('hide');
     this.updateExportDetails([]);
@@ -702,8 +709,12 @@ export default class ChatTopbar {
       this.exportAbortController = undefined;
       return;
     }
-    this.exportProgress.classList.toggle('is-failed', failed);
-    this.exportProgressText.textContent = I18n.format(failed ? 'ChatExport.Failed' : 'ChatExport.Completed', true);
+    this.exportProgress.classList.toggle('is-failed', status === 'failed');
+    this.exportProgress.classList.toggle('is-cancelled', status === 'cancelled');
+    this.exportProgressText.textContent = I18n.format(
+      status === 'failed' ? 'ChatExport.Failed' : status === 'cancelled' ? 'ChatExport.Cancelled' : 'ChatExport.Completed',
+      true
+    );
     this.exportProgressText.append(this.exportProgressBar);
     this.exportAbortController = undefined;
   }
@@ -718,17 +729,26 @@ export default class ChatTopbar {
 
   private async confirmCancelExport() {
     if(!this.exportActive) return;
-    await confirmationPopup({
-      titleLangKey: 'ChatExport.CancelTitle',
-      descriptionLangKey: 'ChatExport.CancelText',
-      button: {
-        langKey: 'ChatExport.Cancel',
-        isDanger: true
-      }
-    }).then(() => {
+    const detailsWasVisible = !!this.exportDetailsPanel && !this.exportDetailsPanel.classList.contains('hide');
+    this.hideExportDetails();
+    let confirmed = false;
+    try {
+      await confirmationPopup({
+        titleLangKey: 'ChatExport.CancelTitle',
+        descriptionLangKey: 'ChatExport.CancelText',
+        button: {
+          langKey: 'ChatExport.Cancel',
+          isDanger: true
+        }
+      });
+      confirmed = true;
       this.exportAbortController?.abort();
-      this.hideExportDetails();
-    }).catch(() => {});
+    } catch(error) {
+      if(error) console.warn('[ChatExport] cancel confirmation failed', error);
+    }
+    if(!confirmed && detailsWasVisible && this.exportActive) {
+      this.exportDetailsPanel?.classList.remove('hide');
+    }
   }
 
   private updateExportDetails(files: NonNullable<ChatExportProgress['activeFiles']>) {
@@ -1050,6 +1070,15 @@ export default class ChatTopbar {
 
   public destroy() {
     // this.chat.log.error('Topbar destroying');
+    this.exportGeneration++;
+    this.exportAbortController?.abort();
+    this.exportProgress?.remove();
+    this.exportDetailsPanel?.remove();
+    this.exportDetailRows.clear();
+    this.exportProgress = undefined;
+    this.exportDetailsPanel = undefined;
+    this.exportAbortController = undefined;
+    this.exportActive = false;
     this.listenerSetter.removeAll();
 
     this.status?.destroy();

@@ -4,9 +4,19 @@ import CheckboxField from '../checkboxField';
 import {attachClickEvent} from '../../helpers/dom/clickEvent';
 import {ChatExportFormat, ChatExportMediaType, ExportDirectoryHandle, exportChatHistory, getExportTitle, pickExportDirectory} from '../../lib/export/chatHistoryExporter';
 import type Chat from '../chat/chat';
+import {ChatType} from '../chat/chat';
 import {toastNew} from '../toast';
+import I18n, {LangPackKey} from '../../lib/langPack';
 
-const MEDIA_OPTIONS = ['Photos', 'Videos', 'Voice', 'Video Notes', 'Stickers', 'Animated GIF', 'Files'];
+const MEDIA_OPTIONS: LangPackKey[] = [
+  'ChatExport.Settings.Photos',
+  'ChatExport.Settings.Videos',
+  'ChatExport.Settings.Voice',
+  'ChatExport.Settings.VideoNotes',
+  'ChatExport.Settings.Stickers',
+  'ChatExport.Settings.AnimatedGif',
+  'ChatExport.Settings.Files'
+];
 
 export default class PopupChatExportSettings extends PopupElement {
   private directory: ExportDirectoryHandle;
@@ -20,10 +30,10 @@ export default class PopupChatExportSettings extends PopupElement {
   private selectAllMediaField: CheckboxField;
   private maxMediaBytes = 2 ** 32;
 
-  private appendCheckbox(title: string, field: CheckboxField) {
+  private appendCheckbox(langKey: LangPackKey, field: CheckboxField) {
     const caption = document.createElement('span');
     caption.className = 'checkbox-caption';
-    caption.textContent = title;
+    caption.textContent = I18n.format(langKey, true);
     field.label.append(caption);
     this.body.append(field.label);
   }
@@ -33,14 +43,14 @@ export default class PopupChatExportSettings extends PopupElement {
       body: true,
       title: (() => {
         const title = document.createElement('span');
-        title.textContent = 'Chat Expert Settings';
+        title.textContent = I18n.format('ChatExport.Settings.Title', true);
         return title;
       })(),
       buttons: [{
         langKey: 'Cancel',
         isCancel: true
       }, {
-        text: document.createTextNode('Export'),
+        langKey: 'ChatExport.Settings.Export',
         callback: () => this.startExport()
       }]
     });
@@ -51,28 +61,31 @@ export default class PopupChatExportSettings extends PopupElement {
   private buildBody() {
     const mediaTitle = document.createElement('div');
     mediaTitle.className = 'chat-export-section-title';
-    mediaTitle.textContent = 'Media';
+    mediaTitle.textContent = I18n.format('ChatExport.Settings.Media', true);
     this.body.append(mediaTitle);
 
     const mediaTypes: ChatExportMediaType[] = ['photos', 'videos', 'voice', 'video_notes', 'stickers', 'animated_gif', 'files'];
     this.selectAllMediaField = new CheckboxField();
-    this.appendCheckbox('Select all', this.selectAllMediaField);
+    this.appendCheckbox('ChatExport.Settings.SelectAll', this.selectAllMediaField);
     this.selectAllMediaField.input.addEventListener('change', () => {
       this.mediaFields.forEach(({field}) => field.setValueSilently(this.selectAllMediaField.checked));
     });
-    MEDIA_OPTIONS.forEach((title, idx) => {
+    MEDIA_OPTIONS.forEach((langKey, idx) => {
       const field = new CheckboxField();
       field.checked = true;
       this.mediaFields.push({type: mediaTypes[idx], field});
-      this.appendCheckbox(title, field);
+      field.input.addEventListener('change', () => {
+        this.selectAllMediaField.setValueSilently(this.mediaFields.every(({field}) => field.checked));
+      });
+      this.appendCheckbox(langKey, field);
     });
     this.selectAllMediaField.checked = true;
 
     const sizeLabel = document.createElement('label');
     sizeLabel.className = 'chat-export-size';
-    sizeLabel.textContent = 'Maximum media file size: ';
+    sizeLabel.append(I18n.format('ChatExport.Settings.MaxMediaSize', true));
     const sizeValue = document.createElement('output');
-    sizeValue.textContent = '4 GB';
+    sizeValue.textContent = this.formatMediaBytes(this.maxMediaBytes);
     const sizeInput = document.createElement('input');
     sizeInput.type = 'range';
     sizeInput.min = '12';
@@ -81,52 +94,55 @@ export default class PopupChatExportSettings extends PopupElement {
     sizeInput.addEventListener('input', () => {
       const bytes = 2 ** +sizeInput.value;
       this.maxMediaBytes = bytes;
-      sizeValue.textContent = bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
+      sizeValue.textContent = this.formatMediaBytes(bytes);
     });
     sizeLabel.append(sizeValue, sizeInput);
     this.body.append(sizeLabel);
 
     const formatTitle = document.createElement('div');
     formatTitle.className = 'chat-export-section-title';
-    formatTitle.textContent = 'Format';
+    formatTitle.textContent = I18n.format('ChatExport.Settings.Format', true);
     this.body.append(formatTitle);
     (['html', 'json'] as ChatExportFormat[]).forEach((format) => {
       const field = new CheckboxField();
       this.formatFields.push({format, field});
-      this.appendCheckbox(format.toUpperCase(), field);
+      this.appendCheckbox(format === 'html' ? 'ChatExport.Settings.HTML' : 'ChatExport.Settings.JSON', field);
     });
     this.formatFields.forEach(({field}) => field.checked = true);
 
     this.directoryButton = document.createElement('button');
     this.directoryButton.className = 'btn-primary btn-color-primary chat-export-directory';
-    this.directoryButton.textContent = 'Choose folder';
+    this.directoryButton.textContent = I18n.format('ChatExport.Settings.ChooseFolder', true);
     attachClickEvent(this.directoryButton, this.chooseDirectory, {listenerSetter: this.listenerSetter});
     this.body.append(this.directoryButton);
 
     const dates = document.createElement('div');
     dates.className = 'chat-export-dates';
-    this.fromButton = this.makeDateButton('From', (date) => {
+    this.fromButton = this.makeDateButton('ChatExport.Settings.From', (date) => {
       this.fromDate = date;
     });
-    this.toButton = this.makeDateButton('To', (date) => {
+    this.toButton = this.makeDateButton('ChatExport.Settings.To', (date) => {
       this.toDate = date;
     });
     dates.append(this.fromButton, this.toButton);
     this.body.append(dates);
   }
 
-  private makeDateButton(label: string, onPick: (date: Date) => void) {
+  private makeDateButton(labelKey: LangPackKey, onPick: (date: Date) => void) {
     const button = document.createElement('button');
     button.className = 'btn-secondary chat-export-date';
-    button.textContent = `${label}: All dates`;
+    button.textContent = `${I18n.format(labelKey, true)}: ${I18n.format('ChatExport.Settings.AllDates', true)}`;
     attachClickEvent(button, () => {
       const popup = PopupElement.createPopup(
         PopupDatePicker,
         new Date(),
         (timestamp: number) => {
           const date = new Date(timestamp * 1000);
-          onPick(date);
-          button.textContent = `${label}: ${date.toLocaleDateString()}`;
+          const normalized = labelKey === 'ChatExport.Settings.To' ?
+            new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0, -1) :
+            new Date(date.getFullYear(), date.getMonth(), date.getDate());
+          onPick(normalized);
+          button.textContent = `${I18n.format(labelKey, true)}: ${normalized.toLocaleDateString()}`;
         },
         {overlayClosable: true}
       );
@@ -138,14 +154,25 @@ export default class PopupChatExportSettings extends PopupElement {
   private chooseDirectory = async() => {
     try {
       this.directory = await pickExportDirectory();
-      const name = this.directory.name || 'Selected folder';
-      this.directoryButton.textContent = `Folder: ${name}`;
+      const name = this.directory.name || I18n.format('ChatExport.Settings.SelectedFolder', true);
+      this.directoryButton.textContent = `${I18n.format('ChatExport.Settings.Folder', true)}: ${name}`;
       this.directoryButton.title = name;
     } catch(error) {
-      if((error as Error).message !== 'DIRECTORY_PICKER_UNSUPPORTED') throw error;
-      toastNew({langPackKey: 'ChatExport.Unsupported'});
+      if(error instanceof DOMException && error.name === 'AbortError') return;
+      if(error instanceof Error && error.message === 'DIRECTORY_PICKER_UNSUPPORTED') {
+        toastNew({langPackKey: 'ChatExport.Unsupported'});
+        return;
+      }
+      console.error('[ChatExport] failed to choose export directory', error);
+      toastNew({langPackKey: 'ChatExport.DirectoryError'});
     }
   };
+
+  private formatMediaBytes(bytes: number) {
+    if(bytes < 1024 ** 2) return `${Math.round(bytes / 1024)} KB`;
+    if(bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(bytes < 10 * 1024 ** 2 ? 1 : 0)} MB`;
+    return `${(bytes / 1024 ** 3).toFixed(bytes < 10 * 1024 ** 3 ? 1 : 0)} GB`;
+  }
 
   private startExport = async() => {
     if(!this.directory) {
@@ -161,14 +188,19 @@ export default class PopupChatExportSettings extends PopupElement {
 
     const title = await getExportTitle(this.chat.peerId);
     const fromDate = this.fromDate;
-    const toDate = this.toDate ? new Date(this.toDate.getTime() + 86400000 - 1) : undefined;
+    const toDate = this.toDate;
+    if(fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
+      toastNew({langPackKey: 'ChatExport.InvalidDateRange'});
+      return false;
+    }
     const abortController = new AbortController();
     this.hide();
-    this.chat.topbar.startExportProgress(title, abortController);
+    const exportGeneration = this.chat.topbar.startExportProgress(title, abortController);
 
     void exportChatHistory({
       peerId: this.chat.peerId,
       threadId: this.chat.threadId,
+      scheduled: this.chat.type === ChatType.Scheduled,
       title,
       directory: this.directory,
       formats,
@@ -177,12 +209,15 @@ export default class PopupChatExportSettings extends PopupElement {
       fromDate,
       toDate,
       signal: abortController.signal,
-      onProgress: (progress) => this.chat.topbar.updateExportProgress(progress)
+      onProgress: (progress) => this.chat.topbar.updateExportProgress(progress, exportGeneration)
     }).then(() => {
-      this.chat.topbar.finishExportProgress(false);
+      this.chat.topbar.finishExportProgress('completed', exportGeneration);
     }, (error) => {
       console.error('[ChatExport] export failed', error);
-      this.chat.topbar.finishExportProgress(true);
+      this.chat.topbar.finishExportProgress(
+        abortController.signal.aborted || (error instanceof DOMException && error.name === 'AbortError') ? 'cancelled' : 'failed',
+        exportGeneration
+      );
     });
 
     return true;

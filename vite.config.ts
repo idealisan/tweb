@@ -96,12 +96,13 @@ export default defineConfig({
   server: serverOptions,
   base: '',
   build: {
+    outDir: 'public',
     modulePreload: false,
     target: 'es2020',
     sourcemap: true,
     assetsDir: '',
     copyPublicDir: false,
-    emptyOutDir: true,
+    emptyOutDir: false,
     minify: NO_MINIFY ? false : undefined,
     rollupOptions: {
       output: {

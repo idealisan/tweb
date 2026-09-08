@@ -1,0 +1,6 @@
+:8080 {
+	root * ./public
+	encode gzip zstd
+	header Cache-Control "no-store"
+	file_server
+}

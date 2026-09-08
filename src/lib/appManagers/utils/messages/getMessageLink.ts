@@ -1,6 +1,6 @@
 import type {AppManagers} from '../../managers';
 import getServerMessageId from '../messageId/getServerMessageId';
-import {Message} from '../../../layer';
+import {Message} from '../../../../layer';
 
 export default async function getMessageLink(
   managers: AppManagers,
