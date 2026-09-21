@@ -1,7 +1,6 @@
 services:
   tweb:
-    build: .
-    image: tweb:latest
+    image: ghcr.io/idealisant/tweb:latest
     container_name: tweb
     ports:
       - "8080:8080"
