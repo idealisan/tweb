@@ -35,7 +35,7 @@ jobs:
         run: pnpm run build
 
       - name: Package build output
-        run: tar -czf "tweb-${{ github.ref_name }}.tar.gz" dist
+        run: tar -czf "tweb-${{ github.ref_name }}.tar.gz" public
 
       - name: Download Caddy and package server bundles
         env:
@@ -75,7 +75,7 @@ jobs:
               caddy_binary=".release/caddy/${target}/caddy"
             fi
             bundle=".release/server/tweb-${RELEASE_TAG}-${target}"
-            bash scripts/package_server_bundle.sh "$target" "$caddy_binary" dist "$bundle"
+            bash scripts/package_server_bundle.sh "$target" "$caddy_binary" public "$bundle"
             if [[ "$target" == windows_* ]]; then
               (cd .release/server && zip -qr "${bundle##*/}.zip" "${bundle##*/}")
             else
