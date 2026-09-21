@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+  CADDY_TARGETS: linux_amd64 linux_arm64 mac_amd64 mac_arm64 windows_amd64 windows_arm64
+
 jobs:
   build-and-upload:
     runs-on: ubuntu-latest
@@ -31,47 +35,57 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build
-        run: pnpm run build
+      - name: Generate changelog
+        run: pnpm run generate-changelog
+
+      - name: Build frontend
+        run: pnpm exec vite build
 
       - name: Package build output
-        run: tar -czf "tweb-${{ github.ref_name }}.tar.gz" dist
+        run: tar -czf "tweb-${RELEASE_TAG}.tar.gz" dist
 
-      - name: Download Caddy and package server bundles
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
+      - name: Resolve latest Caddy version
+        id: caddy
         run: |
           set -euo pipefail
           caddy_tag="$(curl --fail --silent --show-error \
             https://api.github.com/repos/caddyserver/caddy/releases/latest | jq -r .tag_name)"
-          caddy_version="${caddy_tag#v}"
-          mkdir -p .release/caddy .release/server
+          echo "tag=${caddy_tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${caddy_tag#v}" >> "$GITHUB_OUTPUT"
 
-          targets=(
-            linux_amd64
-            linux_arm64
-            mac_amd64
-            mac_arm64
-            windows_amd64
-            windows_arm64
-          )
-          for target in "${targets[@]}"; do
-            archive="caddy_${caddy_version}_${target}"
+      - name: Download and extract Caddy binaries
+        env:
+          CADDY_TAG: ${{ steps.caddy.outputs.tag }}
+          CADDY_VERSION: ${{ steps.caddy.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p .release/caddy
+          for target in $CADDY_TARGETS; do
+            archive="caddy_${CADDY_VERSION}_${target}"
             if [[ "$target" == windows_* ]]; then
               archive="${archive}.zip"
-              curl --fail --location --silent --show-error \
-                -o ".release/caddy/${archive}" \
-                "https://github.com/caddyserver/caddy/releases/download/${caddy_tag}/${archive}"
-              mkdir -p ".release/caddy/${target}"
-              unzip -q ".release/caddy/${archive}" -d ".release/caddy/${target}"
-              caddy_binary=".release/caddy/${target}/caddy.exe"
             else
               archive="${archive}.tar.gz"
-              curl --fail --location --silent --show-error \
-                -o ".release/caddy/${archive}" \
-                "https://github.com/caddyserver/caddy/releases/download/${caddy_tag}/${archive}"
-              mkdir -p ".release/caddy/${target}"
+            fi
+            curl --fail --location --silent --show-error \
+              -o ".release/caddy/${archive}" \
+              "https://github.com/caddyserver/caddy/releases/download/${CADDY_TAG}/${archive}"
+            mkdir -p ".release/caddy/${target}"
+            if [[ "$target" == windows_* ]]; then
+              unzip -q ".release/caddy/${archive}" -d ".release/caddy/${target}"
+            else
               tar -xzf ".release/caddy/${archive}" -C ".release/caddy/${target}"
+            fi
+          done
+
+      - name: Package server bundles
+        run: |
+          set -euo pipefail
+          mkdir -p .release/server
+          for target in $CADDY_TARGETS; do
+            if [[ "$target" == windows_* ]]; then
+              caddy_binary=".release/caddy/${target}/caddy.exe"
+            else
               caddy_binary=".release/caddy/${target}/caddy"
             fi
             bundle=".release/server/tweb-${RELEASE_TAG}-${target}"
@@ -83,7 +97,13 @@ jobs:
             fi
           done
 
-      - name: Upload build artifact to release
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -92,6 +112,7 @@ jobs:
             .release/server/*
 
   docker-image:
+    needs: build-and-upload
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -102,10 +123,11 @@ jobs:
         with:
           ref: ${{ github.ref_name }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Download prebuilt dist
+        uses: actions/download-artifact@v4
         with:
-          platforms: arm64
+          name: dist
+          path: dist
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -121,6 +143,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.prebuilt
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
