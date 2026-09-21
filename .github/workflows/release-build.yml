@@ -13,7 +13,8 @@ env:
   CADDY_TARGETS: linux_amd64 linux_arm64 mac_amd64 mac_arm64 windows_amd64 windows_arm64
 
 jobs:
-  build-and-upload:
+  # Build the frontend once (arch-independent static files)
+  frontend:
     runs-on: ubuntu-latest
     steps:
       - name: Check out release tag
@@ -44,6 +45,22 @@ jobs:
       - name: Package build output
         run: tar -czf "tweb-${RELEASE_TAG}.tar.gz" dist
 
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Upload dist tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-tarball
+          path: tweb-*.tar.gz
+
+  # Fetch Caddy binaries for every target, in parallel
+  caddy:
+    runs-on: ubuntu-latest
+    steps:
       - name: Resolve latest Caddy version
         id: caddy
         run: |
@@ -51,17 +68,18 @@ jobs:
           caddy_tag="$(curl --fail --silent --show-error \
             https://api.github.com/repos/caddyserver/caddy/releases/latest | jq -r .tag_name)"
           echo "tag=${caddy_tag}" >> "$GITHUB_OUTPUT"
-          echo "version=${caddy_tag#v}" >> "$GITHUB_OUTPUT"
 
       - name: Download and extract Caddy binaries
         env:
           CADDY_TAG: ${{ steps.caddy.outputs.tag }}
-          CADDY_VERSION: ${{ steps.caddy.outputs.version }}
+          CADDY_VERSION: ${{ steps.caddy.outputs.tag }}
         run: |
           set -euo pipefail
+          CADDY_VERSION="${CADDY_VERSION#v}"
           mkdir -p .release/caddy
-          for target in $CADDY_TARGETS; do
-            archive="caddy_${CADDY_VERSION}_${target}"
+          fetch() {
+            local target="$1"
+            local archive="caddy_${CADDY_VERSION}_${target}"
             if [[ "$target" == windows_* ]]; then
               archive="${archive}.zip"
             else
@@ -76,43 +94,73 @@ jobs:
             else
               tar -xzf ".release/caddy/${archive}" -C ".release/caddy/${target}"
             fi
-          done
+          }
+          export -f fetch
+          export CADDY_TAG CADDY_VERSION
+          printf '%s\n' $CADDY_TARGETS | xargs -P 6 -I{} bash -c 'fetch "$@"' _ {}
+
+      - name: Upload Caddy binaries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: caddy-bin
+          path: .release/caddy
+
+  # Assemble per-platform server bundles and publish the release
+  bundles:
+    needs: [frontend, caddy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Download Caddy binaries artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: caddy-bin
+          path: .release/caddy
 
       - name: Package server bundles
         run: |
           set -euo pipefail
           mkdir -p .release/server
-          for target in $CADDY_TARGETS; do
+          package() {
+            local target="$1"
             if [[ "$target" == windows_* ]]; then
-              caddy_binary=".release/caddy/${target}/caddy.exe"
+              local caddy_binary=".release/caddy/${target}/caddy.exe"
             else
-              caddy_binary=".release/caddy/${target}/caddy"
+              local caddy_binary=".release/caddy/${target}/caddy"
             fi
-            bundle=".release/server/tweb-${RELEASE_TAG}-${target}"
+            local bundle=".release/server/tweb-${RELEASE_TAG}-${target}"
             bash scripts/package_server_bundle.sh "$target" "$caddy_binary" dist "$bundle"
             if [[ "$target" == windows_* ]]; then
               (cd .release/server && zip -qr "${bundle##*/}.zip" "${bundle##*/}")
             else
               tar -czf "${bundle}.tar.gz" -C .release/server "${bundle##*/}"
             fi
-          done
-
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist
+          }
+          export -f package
+          export RELEASE_TAG
+          printf '%s\n' $CADDY_TARGETS | xargs -P 6 -I{} bash -c 'package "$@"' _ {}
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            tweb-${{ github.ref_name }}.tar.gz
+            tweb-*.tar.gz
             .release/server/*
 
+  # Publish the multi-arch image as soon as the frontend is ready
   docker-image:
-    needs: build-and-upload
+    needs: frontend
     runs-on: ubuntu-latest
     permissions:
       contents: read
