@@ -1,7 +1,11 @@
 services:
   tweb:
-    image: ghcr.io/idealisant/tweb:latest
+    image: ghcr.io/idealisan/tweb:1.1-export-fix-ci-6
     container_name: tweb
     ports:
-      - "8080:8080"
+      - "2080:8080"
+    environment:
+      # 取消注释两行即启用 Basic Auth（必须同时设置，缺一启动会报错）
+      # BASIC_AUTH_USER: admin
+      # BASIC_AUTH_PASSWORD: changeme
     restart: unless-stopped
