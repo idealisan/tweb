@@ -3,7 +3,6 @@ node_modules
 .github
 .release
 dist
-public
 tweb-design
 *.tar.gz
 *.code-workspace
