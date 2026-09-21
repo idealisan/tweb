@@ -1,5 +1,5 @@
 :8080 {
-	root * ./public
+	root * ./dist
 	encode gzip zstd
 	header Cache-Control "no-store"
 	file_server

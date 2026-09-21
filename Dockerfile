@@ -14,8 +14,10 @@ RUN pnpm run build
 # Runtime stage: serve the static output with Caddy
 FROM caddy:2-alpine
 
+WORKDIR /srv
+
 COPY Caddyfile /etc/caddy/Caddyfile
-COPY --from=build /app/public /srv/public
+COPY --from=build /app/dist /srv/dist
 
 EXPOSE 8080
 
