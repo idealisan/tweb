@@ -1,0 +1,8 @@
+services:
+  tweb:
+    build: .
+    image: tweb:latest
+    container_name: tweb
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
