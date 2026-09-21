@@ -1,9 +1,9 @@
 name: Build and upload release assets
 
 on:
-  release:
-    types:
-      - published
+  push:
+    tags:
+      - '*'
 
 permissions:
   contents: write
@@ -15,7 +15,7 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.ref_name }}
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -35,11 +35,11 @@ jobs:
         run: pnpm run build
 
       - name: Package build output
-        run: tar -czf "tweb-${{ github.event.release.tag_name }}.tar.gz" dist
+        run: tar -czf "tweb-${{ github.ref_name }}.tar.gz" dist
 
       - name: Download Caddy and package server bundles
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           caddy_tag="$(curl --fail --silent --show-error \
@@ -86,7 +86,7 @@ jobs:
       - name: Upload build artifact to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: ${{ github.ref_name }}
           files: |
-            tweb-${{ github.event.release.tag_name }}.tar.gz
+            tweb-${{ github.ref_name }}.tar.gz
             .release/server/*
