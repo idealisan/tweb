@@ -121,6 +121,12 @@ jobs:
           name: dist
           path: dist
 
+      - name: Download dist tarball artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-tarball
+          path: .
+
       - name: Download Caddy binaries artifact
         uses: actions/download-artifact@v4
         with:
