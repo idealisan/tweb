@@ -83,12 +83,12 @@ export default defineConfig({
     //   exclude: ['**/*.d.ts', 'src/server/*.ts', 'store/src/**/server.ts']
     // },
     environment: 'jsdom',
-    testTransformMode: {web: ['.[jt]sx?$']},
+    transformMode: {web: ['.[jt]sx?$']},
     // otherwise, solid would be loaded twice:
     // deps: {registerNodeLoader: true},
     // if you have few tests, try commenting one
     // or both out to improve performance:
-    threads: false,
+    pool: 'forks',
     isolate: false,
     globals: true,
     setupFiles: ['./src/tests/setup.ts']

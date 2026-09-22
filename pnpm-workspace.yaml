@@ -1,0 +1,9 @@
+allowBuilds:
+  '@parcel/watcher': true
+  cpu-features: true
+  esbuild: true
+  ssh2: true
+
+overrides:
+  # keep transform output compatible with the vendored solid-js 1.8.1 runtime
+  babel-preset-solid: 1.8.6
