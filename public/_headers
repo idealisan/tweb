@@ -1,0 +1,18 @@
+# https://developers.cloudflare.com/workers/static-assets/headers/
+# Default: revalidate on every request (SPA shell, unversioned worker scripts).
+/*
+  Cache-Control: no-cache
+
+# Vite content-hashed bundles: index-<hash>.js, lang-<hash>.js, *.worker-<hash>.js
+/*-*.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/*.css
+  Cache-Control: public, max-age=31536000, immutable
+
+# Fonts, images and vendored worker payloads (decoder/encoder/rlottie)
+/assets/*
+  Cache-Control: public, max-age=604800
+
+/*.wasm
+  Cache-Control: public, max-age=604800

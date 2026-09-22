@@ -6,6 +6,12 @@ allowBuilds:
   cpu-features: true
   esbuild: true
   ssh2: true
+  workerd: true
+
+minimumReleaseAgeExclude:
+  - '@cloudflare/unenv-preset@2.16.2'
+  - miniflare@5.20260921.0-alpha
+  - wrangler@4.136.1
 
 overrides:
   # keep transform output compatible with the vendored solid-js 1.8.1 runtime

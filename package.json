@@ -15,7 +15,9 @@
     "generate-icons": "node ./src/scripts/icomoon/icomoon_generate.js",
     "change-version": "node ./src/scripts/change_version.js",
     "lint": "npx eslint \"src/**/**.ts\"",
-    "build:solid": "node ./src/scripts/build_solid.js"
+    "build:solid": "node ./src/scripts/build_solid.js",
+    "deploy": "pnpm run build && wrangler deploy",
+    "preview": "pnpm run build && wrangler dev"
   },
   "author": "",
   "license": "GPL-3.0-only",
@@ -64,6 +66,7 @@
     "vite-plugin-checker": "^0.9.3",
     "vite-plugin-handlebars": "^2.0.3",
     "vite-plugin-solid": "^2.11.14",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "wrangler": "^4.136.1"
   }
 }
